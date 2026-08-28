@@ -32,6 +32,7 @@ pub fn setup_tray(
     let tray = TrayIconBuilder::new()
         .with_tooltip("喝水提醒")
         .with_icon(icon())
+        .with_menu_on_left_click(false)
         .with_menu(Box::new(menu))
         .build()
         .expect("create tray");

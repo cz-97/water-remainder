@@ -1,0 +1,281 @@
+use crate::{
+    config::Store,
+    ui::{
+        calendar_color, format_clock, format_date, local_date, now, relative_to_now, window_button,
+    },
+};
+use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
+use gpui::{
+    App, Context, MouseButton, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+    WindowKind, WindowOptions, div, prelude::*, px, rgb, size,
+};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+pub struct MainWindow {
+    store: Arc<Mutex<Store>>,
+    selected_date: NaiveDate,
+}
+
+impl Render for MainWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let today = local_date(now());
+        let selected = self.selected_date;
+        let drinks = self
+            .store
+            .lock()
+            .map(|s| s.drinks.clone())
+            .unwrap_or_default();
+        let selected_drinks: Vec<u64> = drinks
+            .iter()
+            .copied()
+            .filter(|t| local_date(*t) == selected)
+            .collect();
+        let mut drink_counts = HashMap::new();
+        for timestamp in &drinks {
+            *drink_counts.entry(local_date(*timestamp)).or_insert(0usize) += 1;
+        }
+        let earliest = drinks.iter().map(|t| local_date(*t)).min().unwrap_or(today);
+        let day_count = today.signed_duration_since(earliest).num_days().max(0) as usize + 1;
+        let row_count = day_count.div_ceil(7).max(1);
+
+        let mut calendar = div().flex().flex_col().gap_1().w(px(250.));
+        for row in 0..row_count {
+            let month = (0..7).find_map(|offset| {
+                let day = today - DateDuration::days((row * 7 + offset) as i64);
+                (day.day() == 1).then_some(day.month())
+            });
+            let mut week = div().flex().gap_1();
+            for offset in 0..7 {
+                let day = today - DateDuration::days((row * 7 + offset) as i64);
+                let count = drink_counts.get(&day).copied().unwrap_or(0);
+                let mut cell = div()
+                    .w(px(24.))
+                    .h(px(24.))
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .child("")
+                    .bg(calendar_color(count));
+                if day == selected {
+                    cell = cell.border_2().border_color(rgb(0xffffff));
+                }
+                week = week.child(cell.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.selected_date = day;
+                        cx.notify();
+                    }),
+                ));
+            }
+            let month_label = div()
+                .w(px(36.))
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .text_color(rgb(0x94a3b8))
+                .child(
+                    month
+                        .map(|month| format!("{}月", month))
+                        .unwrap_or_default(),
+                );
+            calendar = calendar.child(div().flex().items_center().child(month_label).child(week));
+        }
+        let calendar = calendar.mt_4();
+
+        let mut records = div().flex().flex_col().gap_2().mt_3();
+        if selected_drinks.is_empty() {
+            records = records.child(div().text_color(rgb(0x94a3b8)).child("这天没有喝水记录"));
+        } else {
+            for timestamp in selected_drinks.iter().rev() {
+                let text = if selected == today {
+                    format!(
+                        "{}  ·  {}",
+                        format_clock(*timestamp),
+                        relative_to_now(*timestamp)
+                    )
+                } else {
+                    format_clock(*timestamp)
+                };
+                records = records.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(0x60a5fa)))
+                        .child(text),
+                );
+            }
+        }
+        let titlebar = div()
+            .h(px(38.))
+            .flex()
+            .items_center()
+            .bg(rgb(0x1d1d1d))
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .px_4()
+                    .text_color(rgb(0xe0f2fe))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .window_control_area(WindowControlArea::Drag)
+                    .child("喝水提醒"),
+            )
+            .child(window_button("\u{e921}", WindowControlArea::Min))
+            .child(window_button(
+                if window.is_maximized() {
+                    "\u{e923}"
+                } else {
+                    "\u{e922}"
+                },
+                WindowControlArea::Max,
+            ))
+            .child(window_button("\u{e8bb}", WindowControlArea::Close));
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x1f1f1f))
+            .text_color(rgb(0xe5e7eb))
+            .child(titlebar)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .p_6()
+                    .gap_8()
+                    .justify_center()
+                    .child(
+                        div()
+                            .w(px(250.))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .text_xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child("喝水记录"),
+                            )
+                            .child(calendar),
+                    )
+                    .child(
+                        div()
+                            .w(px(300.))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child(format_date(selected)),
+                            )
+                            .child(div().mt_1().text_color(rgb(0x94a3b8)).child(
+                                if selected == today {
+                                    "今天"
+                                } else {
+                                    "历史记录"
+                                },
+                            ))
+                            .child(records),
+                    ),
+            )
+    }
+}
+
+pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>) {
+    if let Some(handle) = cx.windows().iter().find_map(|w| w.downcast::<MainWindow>()) {
+        let _ = handle.update(cx, |_, window, _| {
+            #[cfg(windows)]
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(value) = handle.as_raw() {
+                    crate::platform::show_main_window(windows::Win32::Foundation::HWND(
+                        value.hwnd.get() as *mut _,
+                    ));
+                }
+            }
+            window.activate_window();
+        });
+        return;
+    }
+    create_main_window(cx, store, true);
+}
+
+pub fn prepare_main_window(cx: &mut App, store: Arc<Mutex<Store>>) {
+    if cx
+        .windows()
+        .iter()
+        .any(|w| w.downcast::<MainWindow>().is_some())
+    {
+        return;
+    }
+    create_main_window(cx, store, false);
+}
+
+fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, show: bool) {
+    let today = Local::now().date_naive();
+    let handle = cx
+        .open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::centered(size(px(600.), px(800.)), cx)),
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some("喝水提醒".into()),
+                    appears_transparent: true,
+                    ..Default::default()
+                }),
+                kind: WindowKind::Normal,
+                is_resizable: true,
+                window_min_size: Some(size(px(560.), px(400.))),
+                window_background: WindowBackgroundAppearance::Opaque,
+                show: show || cfg!(not(windows)),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let view = cx.new(|_| MainWindow {
+                    store,
+                    selected_date: today,
+                });
+                window.on_window_should_close(cx, |window, _| {
+                    #[cfg(windows)]
+                    {
+                        if let Ok(handle) = window.window_handle() {
+                            if let RawWindowHandle::Win32(value) = handle.as_raw() {
+                                crate::platform::hide_main_window(
+                                    windows::Win32::Foundation::HWND(value.hwnd.get() as *mut _),
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                });
+                view
+            },
+        )
+        .ok();
+    #[cfg(windows)]
+    if let Some(handle) = handle {
+        let _ = handle.update(cx, |_, window, _| {
+            if let Ok(h) = window.window_handle() {
+                if let RawWindowHandle::Win32(v) = h.as_raw() {
+                    crate::platform::style_main_window(windows::Win32::Foundation::HWND(
+                        v.hwnd.get() as *mut _,
+                    ));
+                    if show {
+                        crate::platform::show_main_window(windows::Win32::Foundation::HWND(
+                            v.hwnd.get() as *mut _,
+                        ));
+                    }
+                }
+            }
+        });
+    }
+}

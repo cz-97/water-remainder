@@ -1,7 +1,7 @@
 use crate::{
     config::{Store, load_store, save_store},
-    platform::strip_win11_chrome,
     scheduler::AppCmd,
+    ui::now,
 };
 use gpui::{
     App, Context, Image, ImageFormat, MouseButton, Rems, Window, WindowBackgroundAppearance,
@@ -9,12 +9,13 @@ use gpui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-pub struct Overlay {
+use std::time::Duration;
+
+pub struct ReminderWindow {
     scheduler: mpsc::Sender<AppCmd>,
     store: Arc<Mutex<Store>>,
 }
-impl Render for Overlay {
+impl Render for ReminderWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tx = self.scheduler.clone();
         let store = self.store.clone();
@@ -22,8 +23,8 @@ impl Render for Overlay {
             .px_10()
             .py_4()
             .rounded_md()
-            .bg(rgb(0x3b82f6))
-            .hover(|s| s.bg(rgb(0x2563eb)))
+            .bg(rgb(0x60a5fa))
+            .hover(|s| s.bg(rgb(0x3b82f6)))
             .cursor_pointer()
             .text_color(rgb(0xffffff))
             .text_3xl()
@@ -33,13 +34,14 @@ impl Render for Overlay {
                 cx.listener(move |_, _, w, _| {
                     if let Ok(mut s) = store.lock() {
                         s.drinks.push(now());
-                        save_store(&s)
+                        save_store(&s);
                     }
-                    let _ = tx.send(AppCmd::Reset(Duration::from_secs(current_interval())));
-                    w.remove_window()
+                    let _ = tx.send(AppCmd::Reset(Duration::from_secs(
+                        load_store().settings.interval_secs,
+                    )));
+                    w.remove_window();
                 }),
             );
-        let tx = self.scheduler.clone();
         let skip = div()
             .px_10()
             .py_4()
@@ -52,10 +54,7 @@ impl Render for Overlay {
             .child("跳过")
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |_, _, w, _| {
-                    let _ = tx.send(AppCmd::Reset(Duration::from_secs(current_interval())));
-                    w.remove_window()
-                }),
+                cx.listener(|_, _, w, _| w.remove_window()),
             );
         div()
             .flex()
@@ -64,7 +63,7 @@ impl Render for Overlay {
             .justify_start()
             .items_center()
             .gap_2()
-            .bg(hsla(0.0, 0.0, 0.0, 0.85))
+            .bg(hsla(0., 0., 0., 0.85))
             .child(
                 div()
                     .text_color(rgb(0xffffff))
@@ -83,17 +82,12 @@ impl Render for Overlay {
             .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-fn current_interval() -> u64 {
-    load_store().settings.interval_secs
-}
-pub fn open_overlay(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<Mutex<Store>>) {
-    if !cx.windows().is_empty() {
+pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<Mutex<Store>>) {
+    if cx
+        .windows()
+        .iter()
+        .any(|w| w.downcast::<ReminderWindow>().is_some())
+    {
         return;
     }
     let display = match cx.primary_display() {
@@ -114,7 +108,7 @@ pub fn open_overlay(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<Mutex<Sto
                 ..Default::default()
             },
             move |_, cx| {
-                cx.new(|_| Overlay {
+                cx.new(|_| ReminderWindow {
                     scheduler: tx,
                     store,
                 })
@@ -123,10 +117,12 @@ pub fn open_overlay(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<Mutex<Sto
         .ok();
     #[cfg(windows)]
     if let Some(handle) = handle {
-        let _ = handle.update(cx, |_, w, _| {
-            if let Ok(h) = w.window_handle() {
-                if let RawWindowHandle::Win32(v) = h.as_raw() {
-                    strip_win11_chrome(windows::Win32::Foundation::HWND(v.hwnd.get() as *mut _));
+        let _ = handle.update(cx, |_, window, _| {
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(value) = handle.as_raw() {
+                    crate::platform::strip_win11_chrome(windows::Win32::Foundation::HWND(
+                        value.hwnd.get() as *mut _,
+                    ));
                 }
             }
         });

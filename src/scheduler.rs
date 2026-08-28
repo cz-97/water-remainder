@@ -21,18 +21,10 @@ pub fn start_scheduler(settings: &Settings) -> (mpsc::Sender<AppCmd>, mpsc::Rece
                         if at.send(AppCmd::ShowOverlay).is_err() {
                             break;
                         }
-                        match wait_for_resume(&cr) {
-                            Some(next) => interval = next,
-                            None => break,
-                        }
                     }
                     Ok(AppCmd::Trigger) => {
                         if at.send(AppCmd::ShowOverlay).is_err() {
                             break;
-                        }
-                        match wait_for_resume(&cr) {
-                            Some(next) => interval = next,
-                            None => break,
                         }
                     }
                     Ok(AppCmd::ShowOverlay) => {}
@@ -41,14 +33,4 @@ pub fn start_scheduler(settings: &Settings) -> (mpsc::Sender<AppCmd>, mpsc::Rece
         }
     });
     (ct, ar)
-}
-
-fn wait_for_resume(control_rx: &mpsc::Receiver<AppCmd>) -> Option<Duration> {
-    loop {
-        match control_rx.recv() {
-            Ok(AppCmd::Reset(next)) => return Some(next),
-            Ok(AppCmd::Stop) | Err(mpsc::RecvError) => return None,
-            Ok(AppCmd::Trigger) | Ok(AppCmd::ShowOverlay) => {}
-        }
-    }
 }

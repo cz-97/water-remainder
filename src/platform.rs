@@ -1,7 +1,7 @@
 #[cfg(windows)]
 pub fn enable_system_menu_theme() {
-    use windows::core::{s, PCSTR};
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows::core::{PCSTR, s};
 
     // SetPreferredAppMode is an undocumented uxtheme API used by Windows'
     // own menu implementation. `1` is the AllowDark value; with this mode
@@ -102,6 +102,7 @@ pub fn ensure_single_instance() -> bool {
 pub fn ensure_single_instance() -> bool {
     true
 }
+
 #[cfg(windows)]
 pub fn strip_win11_chrome(hwnd: windows::Win32::Foundation::HWND) {
     use windows::Win32::Graphics::Dwm::{
@@ -109,19 +110,69 @@ pub fn strip_win11_chrome(hwnd: windows::Win32::Foundation::HWND) {
         DwmSetWindowAttribute,
     };
     unsafe {
-        let c = DWMWCP_DONOTROUND;
+        let corner = DWMWCP_DONOTROUND;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
-            &c as *const _ as *const _,
-            std::mem::size_of_val(&c) as u32,
+            &corner as *const _ as *const _,
+            std::mem::size_of_val(&corner) as u32,
         );
-        let b = DWMWA_COLOR_NONE;
+        let border = DWMWA_COLOR_NONE;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR,
-            &b as *const _ as *const _,
-            std::mem::size_of_val(&b) as u32,
+            &border as *const _ as *const _,
+            std::mem::size_of_val(&border) as u32,
         );
+    }
+}
+
+#[cfg(windows)]
+pub fn style_main_window(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        DwmSetWindowAttribute,
+    };
+
+    unsafe {
+        let corner = DWMWCP_ROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as *const _,
+            std::mem::size_of_val(&corner) as u32,
+        );
+        let border = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border as *const _ as *const _,
+            std::mem::size_of_val(&border) as u32,
+        );
+    }
+}
+
+#[cfg(windows)]
+pub fn show_main_window(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsZoomed, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow,
+    };
+
+    unsafe {
+        let show_command = if IsZoomed(hwnd).as_bool() {
+            SW_SHOWMAXIMIZED
+        } else {
+            SW_SHOWNOACTIVATE
+        };
+        let _ = ShowWindow(hwnd, show_command);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+#[cfg(windows)]
+pub fn hide_main_window(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
     }
 }

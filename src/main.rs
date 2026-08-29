@@ -16,7 +16,6 @@ use reminder_window::open_reminder_window;
 use scheduler::{AppCmd, start_scheduler};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
-use std::time::Instant;
 use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -51,8 +50,6 @@ fn main() {
             let shared = store.clone();
             main_window::prepare_main_window(cx, shared.clone());
             cx.spawn(async move |cx| {
-                let mut pending_left_click = None;
-                let mut suppress_left_up = false;
                 loop {
                     while let Ok(event) = tray_rx.try_recv() {
                         match event {
@@ -60,33 +57,12 @@ fn main() {
                                 button: MouseButton::Left,
                                 button_state: MouseButtonState::Up,
                                 ..
-                            } if suppress_left_up => {
-                                suppress_left_up = false;
-                            }
-                            TrayIconEvent::Click {
-                                button: MouseButton::Left,
-                                button_state: MouseButtonState::Up,
-                                ..
                             } => {
-                                pending_left_click = Some(Instant::now());
-                            }
-                            TrayIconEvent::DoubleClick {
-                                button: MouseButton::Left,
-                                ..
-                            } => {
-                                pending_left_click = None;
-                                suppress_left_up = true;
-                                let _ = scheduler_tx.send(AppCmd::Trigger);
+                                let records = shared.clone();
+                                let _ = cx.update(|cx| open_main_window(cx, records));
                             }
                             _ => {}
                         }
-                    }
-                    if pending_left_click
-                        .is_some_and(|time| time.elapsed() >= Duration::from_millis(50))
-                    {
-                        pending_left_click = None;
-                        let records = shared.clone();
-                        let _ = cx.update(|cx| open_main_window(cx, records));
                     }
                     while let Ok(event) = menu_rx.try_recv() {
                         if event.id == show_id {

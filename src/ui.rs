@@ -66,7 +66,7 @@ pub fn window_button(label: &'static str, area: WindowControlArea) -> impl IntoE
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(18.))
+        .text_size(px(12.))
         .text_color(rgb(0xe0f2fe))
         .occlude()
         .hover(move |s| s.bg(hover))

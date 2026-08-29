@@ -1,13 +1,13 @@
 use crate::{
-    config::Store,
+    config::{Store, WindowState, save_store},
     ui::{
         calendar_color, format_clock, format_date, local_date, now, relative_to_now, window_button,
     },
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
 use gpui::{
-    App, Context, MouseButton, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowKind, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, MouseButton, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
@@ -39,7 +39,12 @@ impl Render for MainWindow {
             *drink_counts.entry(local_date(*timestamp)).or_insert(0usize) += 1;
         }
         let earliest = drinks.iter().map(|t| local_date(*t)).min().unwrap_or(today);
-        let day_count = today.signed_duration_since(earliest).num_days().max(0) as usize + 1;
+        let earliest_month_start = earliest.with_day(1).unwrap_or(earliest);
+        let day_count = today
+            .signed_duration_since(earliest_month_start)
+            .num_days()
+            .max(0) as usize
+            + 1;
         let row_count = day_count.div_ceil(7).max(1);
 
         let mut calendar = div().flex().flex_col().gap_1().w(px(250.));
@@ -169,7 +174,7 @@ impl Render for MainWindow {
                     )
                     .child(
                         div()
-                            .w(px(300.))
+                            .w(px(250.))
                             .flex()
                             .flex_col()
                             .child(
@@ -209,23 +214,50 @@ pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>) {
     create_main_window(cx, store, true);
 }
 
-pub fn prepare_main_window(cx: &mut App, store: Arc<Mutex<Store>>) {
-    if cx
-        .windows()
-        .iter()
-        .any(|w| w.downcast::<MainWindow>().is_some())
-    {
-        return;
+pub fn save_main_window_state(cx: &mut App) {
+    if let Some(handle) = cx.windows().iter().find_map(|w| w.downcast::<MainWindow>()) {
+        let _ = handle.update(cx, |view, window, _| {
+            let bounds = window.window_bounds();
+            let (bounds, maximized) = match bounds {
+                WindowBounds::Windowed(bounds) => (bounds, false),
+                WindowBounds::Maximized(bounds) => (bounds, true),
+                WindowBounds::Fullscreen(bounds) => (bounds, false),
+            };
+            if let Ok(mut store) = view.store.lock() {
+                store.window_state = Some(WindowState {
+                    x: bounds.origin.x.as_f32(),
+                    y: bounds.origin.y.as_f32(),
+                    width: bounds.size.width.as_f32(),
+                    height: bounds.size.height.as_f32(),
+                    maximized,
+                });
+                save_store(&store);
+            }
+        });
     }
-    create_main_window(cx, store, false);
 }
 
 fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, show: bool) {
     let today = Local::now().date_naive();
+    let saved_state = store.lock().ok().and_then(|s| s.window_state);
+    let window_bounds = saved_state
+        .map(|s| {
+            let bounds = Bounds {
+                origin: point(px(s.x), px(s.y)),
+                size: size(px(s.width), px(s.height)),
+            };
+            if s.maximized {
+                WindowBounds::Maximized(bounds)
+            } else {
+                WindowBounds::Windowed(bounds)
+            }
+        })
+        .unwrap_or_else(|| WindowBounds::centered(size(px(500.), px(800.)), cx));
+    let close_store = store.clone();
     let handle = cx
         .open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::centered(size(px(600.), px(800.)), cx)),
+                window_bounds: Some(window_bounds),
                 titlebar: Some(gpui::TitlebarOptions {
                     title: Some("喝水提醒".into()),
                     appears_transparent: true,
@@ -233,27 +265,33 @@ fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, show: bool) {
                 }),
                 kind: WindowKind::Normal,
                 is_resizable: true,
-                window_min_size: Some(size(px(560.), px(400.))),
+                window_min_size: Some(size(px(500.), px(800.))),
                 window_background: WindowBackgroundAppearance::Opaque,
                 show: show || cfg!(not(windows)),
                 ..Default::default()
             },
             move |window, cx| {
+                let close_store = close_store.clone();
                 let view = cx.new(|_| MainWindow {
                     store,
                     selected_date: today,
                 });
-                window.on_window_should_close(cx, |window, _| {
-                    #[cfg(windows)]
-                    {
-                        if let Ok(handle) = window.window_handle() {
-                            if let RawWindowHandle::Win32(value) = handle.as_raw() {
-                                crate::platform::hide_main_window(
-                                    windows::Win32::Foundation::HWND(value.hwnd.get() as *mut _),
-                                );
-                                return false;
-                            }
-                        }
+                window.on_window_should_close(cx, move |window, _| {
+                    let bounds = window.window_bounds();
+                    let (bounds, maximized) = match bounds {
+                        WindowBounds::Windowed(bounds) => (bounds, false),
+                        WindowBounds::Maximized(bounds) => (bounds, true),
+                        WindowBounds::Fullscreen(bounds) => (bounds, false),
+                    };
+                    if let Ok(mut store) = close_store.lock() {
+                        store.window_state = Some(WindowState {
+                            x: bounds.origin.x.as_f32(),
+                            y: bounds.origin.y.as_f32(),
+                            width: bounds.size.width.as_f32(),
+                            height: bounds.size.height.as_f32(),
+                            maximized,
+                        });
+                        save_store(&store);
                     }
                     true
                 });

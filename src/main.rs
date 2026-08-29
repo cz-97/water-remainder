@@ -9,6 +9,8 @@ mod tray;
 mod ui;
 
 use config::{Store, load_store, save_store};
+use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures_util::StreamExt;
 use gpui::App;
 use gpui_platform::application;
 use main_window::open_main_window;
@@ -19,6 +21,16 @@ use std::time::Duration;
 use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+
+enum AppEvent {
+    Tray(TrayIconEvent),
+    Menu(MenuEvent),
+    Alarm(AppCmd),
+}
+
+fn send_event(tx: &UnboundedSender<AppEvent>, event: AppEvent) {
+    let _ = tx.unbounded_send(event);
+}
 
 fn main() {
     if !platform::ensure_single_instance() {
@@ -45,63 +57,79 @@ fn main() {
                 .iter()
                 .map(|(seconds, item)| (*seconds, item.id().clone(), item.clone()))
                 .collect();
-            let menu_rx = MenuEvent::receiver();
-            let tray_rx = TrayIconEvent::receiver();
             let shared = store.clone();
-            main_window::prepare_main_window(cx, shared.clone());
+            let (event_tx, event_rx) = unbounded();
+            let tray_tx = event_tx.clone();
+            TrayIconEvent::set_event_handler(Some(move |event| {
+                send_event(&tray_tx, AppEvent::Tray(event));
+            }));
+            let menu_tx = event_tx.clone();
+            MenuEvent::set_event_handler(Some(move |event| {
+                send_event(&menu_tx, AppEvent::Menu(event));
+            }));
+            let alarm_tx = event_tx.clone();
+            std::thread::spawn(move || {
+                while let Ok(event) = alarm_rx.recv() {
+                    if alarm_tx.unbounded_send(AppEvent::Alarm(event)).is_err() {
+                        break;
+                    }
+                }
+            });
             cx.spawn(async move |cx| {
-                loop {
-                    while let Ok(event) = tray_rx.try_recv() {
-                        match event {
-                            TrayIconEvent::Click {
+                let mut event_rx: UnboundedReceiver<AppEvent> = event_rx;
+                while let Some(event) = event_rx.next().await {
+                    match event {
+                        AppEvent::Tray(event) => {
+                            if let TrayIconEvent::Click {
                                 button: MouseButton::Left,
                                 button_state: MouseButtonState::Up,
                                 ..
-                            } => {
+                            } = event
+                            {
                                 let records = shared.clone();
                                 let _ = cx.update(|cx| open_main_window(cx, records));
                             }
-                            _ => {}
                         }
-                    }
-                    while let Ok(event) = menu_rx.try_recv() {
-                        if event.id == show_id {
-                            let _ = scheduler_tx.send(AppCmd::Trigger);
-                        } else if event.id == quit_id {
-                            let _ = scheduler_tx.send(AppCmd::Stop);
-                            cx.update(|cx| cx.quit());
-                            return;
-                        } else if event.id == startup_id {
-                            if let Ok(mut store) = shared.lock() {
-                                store.settings.autostart = !store.settings.autostart;
-                                platform::set_autostart(store.settings.autostart);
-                                save_store(&store);
-                            }
-                        } else if event.id == startup_remind_id {
-                            if let Ok(mut store) = shared.lock() {
-                                store.settings.startup_remind = !store.settings.startup_remind;
-                                save_store(&store);
-                            }
-                        } else if let Some((seconds, _, _)) =
-                            interval_ids.iter().find(|(_, id, _)| *id == event.id)
-                        {
-                            for (_, _, item) in &interval_ids {
-                                item.set_checked(event.id == item.id());
-                            }
-                            if let Ok(mut store) = shared.lock() {
-                                store.settings.interval_secs = *seconds;
-                                save_store(&store);
-                                let _ =
-                                    scheduler_tx.send(AppCmd::Reset(Duration::from_secs(*seconds)));
+                        AppEvent::Menu(event) => {
+                            if event.id == show_id {
+                                let _ = scheduler_tx.send(AppCmd::Trigger);
+                            } else if event.id == quit_id {
+                                let _ = scheduler_tx.send(AppCmd::Stop);
+                                cx.update(|cx| {
+                                    main_window::save_main_window_state(cx);
+                                    cx.quit();
+                                });
+                                return;
+                            } else if event.id == startup_id {
+                                if let Ok(mut store) = shared.lock() {
+                                    store.settings.autostart = !store.settings.autostart;
+                                    platform::set_autostart(store.settings.autostart);
+                                    save_store(&store);
+                                }
+                            } else if event.id == startup_remind_id {
+                                if let Ok(mut store) = shared.lock() {
+                                    store.settings.startup_remind = !store.settings.startup_remind;
+                                    save_store(&store);
+                                }
+                            } else if let Some((seconds, _, _)) =
+                                interval_ids.iter().find(|(_, id, _)| *id == event.id)
+                            {
+                                for (_, _, item) in &interval_ids {
+                                    item.set_checked(event.id == item.id());
+                                }
+                                if let Ok(mut store) = shared.lock() {
+                                    store.settings.interval_secs = *seconds;
+                                    save_store(&store);
+                                    let _ = scheduler_tx
+                                        .send(AppCmd::Reset(Duration::from_secs(*seconds)));
+                                }
                             }
                         }
+                        AppEvent::Alarm(AppCmd::ShowOverlay) => {
+                            show_reminder(cx, scheduler_tx.clone(), shared.clone());
+                        }
+                        AppEvent::Alarm(_) => {}
                     }
-                    while let Ok(AppCmd::ShowOverlay) = alarm_rx.try_recv() {
-                        show_reminder(cx, scheduler_tx.clone(), shared.clone());
-                    }
-                    cx.background_executor()
-                        .timer(Duration::from_millis(16))
-                        .await;
                 }
             })
             .detach();

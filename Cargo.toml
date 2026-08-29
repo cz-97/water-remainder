@@ -10,6 +10,8 @@ gpui_platform = { git = "https://github.com/zed-industries/zed" }
 tray-icon = "0.19"
 raw-window-handle = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures-channel = "0.3"
+futures-util = "0.3"
 
 [profile.release]
 opt-level = "z"

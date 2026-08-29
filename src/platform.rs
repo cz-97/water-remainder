@@ -168,11 +168,3 @@ pub fn show_main_window(hwnd: windows::Win32::Foundation::HWND) {
         let _ = SetForegroundWindow(hwnd);
     }
 }
-
-#[cfg(windows)]
-pub fn hide_main_window(hwnd: windows::Win32::Foundation::HWND) {
-    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
-    unsafe {
-        let _ = ShowWindow(hwnd, SW_HIDE);
-    }
-}

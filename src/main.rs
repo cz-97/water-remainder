@@ -125,8 +125,8 @@ fn main() {
                                 }
                             }
                         }
-                        AppEvent::Alarm(AppCmd::ShowOverlay) => {
-                            show_reminder(cx, scheduler_tx.clone(), shared.clone());
+                        AppEvent::Alarm(AppCmd::ShowOverlay(remaining)) => {
+                            show_reminder(cx, scheduler_tx.clone(), shared.clone(), remaining);
                         }
                         AppEvent::Alarm(_) => {}
                     }
@@ -140,6 +140,7 @@ fn show_reminder(
     cx: &mut gpui::AsyncApp,
     scheduler: mpsc::Sender<AppCmd>,
     store: Arc<Mutex<Store>>,
+    remaining: Duration,
 ) {
-    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, store));
+    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, store, remaining));
 }

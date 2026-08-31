@@ -14,6 +14,7 @@ use std::time::Duration;
 pub struct ReminderWindow {
     scheduler: mpsc::Sender<AppCmd>,
     store: Arc<Mutex<Store>>,
+    reminder_status: String,
 }
 impl Render for ReminderWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -69,8 +70,15 @@ impl Render for ReminderWindow {
                     .text_color(rgb(0xffffff))
                     .text_size(Rems(2.5))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child("该喝水了 💧")
-                    .mt_32(),
+                    .child("该喝水了")
+                    .mt_24(),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .text_color(rgb(0xcbd5e1))
+                    .text_size(Rems(1.05))
+                    .child(self.reminder_status.clone()),
             )
             .child(
                 img(std::sync::Arc::new(Image::from_bytes(
@@ -82,7 +90,12 @@ impl Render for ReminderWindow {
             .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<Mutex<Store>>) {
+pub fn open_reminder_window(
+    cx: &mut App,
+    tx: mpsc::Sender<AppCmd>,
+    store: Arc<Mutex<Store>>,
+    remaining: Duration,
+) {
     if cx
         .windows()
         .iter()
@@ -95,6 +108,7 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<M
         None => return,
     };
     let bounds = display.bounds();
+    let reminder_status = reminder_status(&store, now(), remaining);
     let handle = cx
         .open_window(
             WindowOptions {
@@ -111,6 +125,7 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<M
                 cx.new(|_| ReminderWindow {
                     scheduler: tx,
                     store,
+                    reminder_status,
                 })
             },
         )
@@ -127,4 +142,25 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, store: Arc<M
             }
         });
     }
+}
+
+fn reminder_status(store: &Arc<Mutex<Store>>, opened_at: u64, remaining: Duration) -> String {
+    let Ok(store) = store.lock() else {
+        return "将于下个提醒间隔后再次提醒您".into();
+    };
+
+    let remaining_minutes = remaining.as_secs().div_ceil(60);
+    let Some(&last_drink) = store.drinks.iter().max() else {
+        return format!(
+            "您还没有喝水记录，将于{}分钟后再次提醒您",
+            remaining_minutes
+        );
+    };
+
+    let elapsed_secs = opened_at.saturating_sub(last_drink);
+    let elapsed_minutes = elapsed_secs / 60;
+    format!(
+        "您在{}分钟前喝过水，将于{}分钟后再次提醒您",
+        elapsed_minutes, remaining_minutes
+    )
 }

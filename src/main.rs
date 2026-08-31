@@ -5,10 +5,11 @@ mod main_window;
 mod platform;
 mod reminder_window;
 mod scheduler;
+mod settings_window;
 mod tray;
 mod ui;
 
-use config::{Store, load_store, save_store};
+use config::{Store, load_store};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
 use gpui::App;
@@ -43,7 +44,7 @@ fn main() {
             let settings = store.lock().unwrap().settings.clone();
             platform::enable_system_menu_theme();
             platform::set_autostart(settings.autostart);
-            let (tray, show, quit, intervals, startup, startup_remind) = setup_tray(&settings);
+            let (tray, show, quit) = setup_tray();
             std::mem::forget(tray);
             let (scheduler_tx, alarm_rx) = start_scheduler(&settings);
             if settings.startup_remind {
@@ -51,12 +52,6 @@ fn main() {
             }
             let show_id = show.id().clone();
             let quit_id = quit.id().clone();
-            let startup_id = startup.id().clone();
-            let startup_remind_id = startup_remind.id().clone();
-            let interval_ids: Vec<_> = intervals
-                .iter()
-                .map(|(seconds, item)| (*seconds, item.id().clone(), item.clone()))
-                .collect();
             let shared = store.clone();
             let (event_tx, event_rx) = unbounded();
             let tray_tx = event_tx.clone();
@@ -87,7 +82,9 @@ fn main() {
                             } = event
                             {
                                 let records = shared.clone();
-                                let _ = cx.update(|cx| open_main_window(cx, records));
+                                let _ = cx.update(|cx| {
+                                    open_main_window(cx, records, scheduler_tx.clone())
+                                });
                             }
                         }
                         AppEvent::Menu(event) => {
@@ -100,29 +97,6 @@ fn main() {
                                     cx.quit();
                                 });
                                 return;
-                            } else if event.id == startup_id {
-                                if let Ok(mut store) = shared.lock() {
-                                    store.settings.autostart = !store.settings.autostart;
-                                    platform::set_autostart(store.settings.autostart);
-                                    save_store(&store);
-                                }
-                            } else if event.id == startup_remind_id {
-                                if let Ok(mut store) = shared.lock() {
-                                    store.settings.startup_remind = !store.settings.startup_remind;
-                                    save_store(&store);
-                                }
-                            } else if let Some((seconds, _, _)) =
-                                interval_ids.iter().find(|(_, id, _)| *id == event.id)
-                            {
-                                for (_, _, item) in &interval_ids {
-                                    item.set_checked(event.id == item.id());
-                                }
-                                if let Ok(mut store) = shared.lock() {
-                                    store.settings.interval_secs = *seconds;
-                                    save_store(&store);
-                                    let _ = scheduler_tx
-                                        .send(AppCmd::Reset(Duration::from_secs(*seconds)));
-                                }
                             }
                         }
                         AppEvent::Alarm(AppCmd::ShowOverlay(remaining)) => {

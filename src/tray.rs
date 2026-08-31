@@ -1,32 +1,10 @@
-use crate::config::{INTERVALS, Settings};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
-pub fn setup_tray(
-    s: &Settings,
-) -> (
-    TrayIcon,
-    MenuItem,
-    MenuItem,
-    Vec<(u64, CheckMenuItem)>,
-    CheckMenuItem,
-    CheckMenuItem,
-) {
+pub fn setup_tray() -> (TrayIcon, MenuItem, MenuItem) {
     let show = MenuItem::new("立即提醒", true, None);
     let quit = MenuItem::new("退出", true, None);
-    let startup = CheckMenuItem::new("开机启动", true, s.autostart, None);
-    let startup_remind = CheckMenuItem::new("启动时立即提醒", true, s.startup_remind, None);
-    let sub = Submenu::new("提醒间隔", true);
-    let mut ints = Vec::new();
-    for &(secs, label) in INTERVALS {
-        let item = CheckMenuItem::new(label, true, s.interval_secs == secs, None);
-        sub.append(&item).ok();
-        ints.push((secs, item));
-    }
     let menu = Menu::new();
     menu.append(&show).ok();
-    menu.append(&sub).ok();
-    menu.append(&startup).ok();
-    menu.append(&startup_remind).ok();
     menu.append(&PredefinedMenuItem::separator()).ok();
     menu.append(&quit).ok();
     let tray = TrayIconBuilder::new()
@@ -36,7 +14,7 @@ pub fn setup_tray(
         .with_menu(Box::new(menu))
         .build()
         .expect("create tray");
-    (tray, show, quit, ints, startup, startup_remind)
+    (tray, show, quit)
 }
 fn icon() -> tray_icon::Icon {
     #[cfg(windows)]

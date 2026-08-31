@@ -1,5 +1,7 @@
 use crate::{
     config::{Store, WindowState, save_store},
+    scheduler::AppCmd,
+    settings_window::{close_settings_window, open_settings_window},
     ui::{
         calendar_color, format_clock, format_date, local_date, now, relative_to_now, window_button,
     },
@@ -12,11 +14,12 @@ use gpui::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
 };
 
 pub struct MainWindow {
     store: Arc<Mutex<Store>>,
+    scheduler: mpsc::Sender<AppCmd>,
     selected_date: NaiveDate,
 }
 
@@ -131,6 +134,27 @@ impl Render for MainWindow {
                     .window_control_area(WindowControlArea::Drag)
                     .child("喝水提醒"),
             )
+            .child(
+                div()
+                    .id("settings-button")
+                    .font_family("Segoe Fluent Icons")
+                    .w(px(46.))
+                    .h(px(38.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(14.))
+                    .text_color(rgb(0xe0f2fe))
+                    .hover(|s| s.bg(rgb(0x254c77)))
+                    .cursor_pointer()
+                    .child("\u{e713}")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            open_settings_window(cx, this.store.clone(), this.scheduler.clone());
+                        }),
+                    ),
+            )
             .child(window_button("\u{e921}", WindowControlArea::Min))
             .child(window_button(
                 if window.is_maximized() {
@@ -196,7 +220,7 @@ impl Render for MainWindow {
     }
 }
 
-pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>) {
+pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>, scheduler: mpsc::Sender<AppCmd>) {
     if let Some(handle) = cx.windows().iter().find_map(|w| w.downcast::<MainWindow>()) {
         let _ = handle.update(cx, |_, window, _| {
             #[cfg(windows)]
@@ -211,7 +235,7 @@ pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>) {
         });
         return;
     }
-    create_main_window(cx, store, true);
+    create_main_window(cx, store, scheduler, true);
 }
 
 pub fn save_main_window_state(cx: &mut App) {
@@ -237,7 +261,12 @@ pub fn save_main_window_state(cx: &mut App) {
     }
 }
 
-fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, show: bool) {
+fn create_main_window(
+    cx: &mut App,
+    store: Arc<Mutex<Store>>,
+    scheduler: mpsc::Sender<AppCmd>,
+    show: bool,
+) {
     let today = Local::now().date_naive();
     let saved_state = store.lock().ok().and_then(|s| s.window_state);
     let window_bounds = saved_state
@@ -274,9 +303,11 @@ fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, show: bool) {
                 let close_store = close_store.clone();
                 let view = cx.new(|_| MainWindow {
                     store,
+                    scheduler,
                     selected_date: today,
                 });
-                window.on_window_should_close(cx, move |window, _| {
+                window.on_window_should_close(cx, move |window, cx| {
+                    close_settings_window(cx);
                     let bounds = window.window_bounds();
                     let (bounds, maximized) = match bounds {
                         WindowBounds::Windowed(bounds) => (bounds, false),

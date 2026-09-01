@@ -17,22 +17,23 @@ pub fn start_scheduler(settings: &Settings) -> (mpsc::Sender<AppCmd>, mpsc::Rece
         let initial = Duration::from_secs(settings.interval_secs);
         move || {
             let mut interval = initial;
-            let mut started_at = Instant::now();
+            let mut deadline = Instant::now() + initial;
             loop {
-                match cr.recv_timeout(interval) {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                match cr.recv_timeout(remaining) {
                     Ok(AppCmd::Reset(next)) => {
                         interval = next;
-                        started_at = Instant::now();
+                        deadline = Instant::now() + next;
                     }
                     Ok(AppCmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        deadline = Instant::now() + interval;
                         if at.send(AppCmd::ShowOverlay(interval)).is_err() {
                             break;
                         }
-                        started_at = Instant::now();
                     }
                     Ok(AppCmd::Trigger) => {
-                        let remaining = interval.saturating_sub(started_at.elapsed());
+                        let remaining = deadline.saturating_duration_since(Instant::now());
                         if at.send(AppCmd::ShowOverlay(remaining)).is_err() {
                             break;
                         }

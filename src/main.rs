@@ -22,6 +22,7 @@ use std::time::Duration;
 use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+use ui::now;
 
 enum AppEvent {
     Tray(TrayIconEvent),
@@ -46,8 +47,15 @@ fn main() {
             platform::set_autostart(settings.autostart);
             let (tray, show, quit) = setup_tray();
             std::mem::forget(tray);
-            let (scheduler_tx, alarm_rx) = start_scheduler(&settings);
-            if settings.startup_remind {
+            let first_delay = first_reminder_delay(&store, settings.interval_secs);
+            let remind_on_start = first_delay.is_zero();
+            let initial_delay = if remind_on_start {
+                Duration::from_secs(settings.interval_secs)
+            } else {
+                first_delay
+            };
+            let (scheduler_tx, alarm_rx) = start_scheduler(&settings, initial_delay);
+            if remind_on_start {
                 let _ = scheduler_tx.send(AppCmd::Trigger);
             }
             let show_id = show.id().clone();
@@ -117,4 +125,15 @@ fn show_reminder(
     remaining: Duration,
 ) {
     let _ = cx.update(|cx| open_reminder_window(cx, scheduler, store, remaining));
+}
+
+fn first_reminder_delay(store: &Arc<Mutex<Store>>, interval_secs: u64) -> Duration {
+    let Ok(store) = store.lock() else {
+        return Duration::from_secs(interval_secs);
+    };
+    let Some(&last_drink) = store.drinks.iter().max() else {
+        return Duration::from_secs(interval_secs);
+    };
+    let elapsed = now().saturating_sub(last_drink);
+    Duration::from_secs(interval_secs.saturating_sub(elapsed))
 }

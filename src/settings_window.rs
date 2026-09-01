@@ -25,7 +25,6 @@ impl Render for SettingsWindow {
             .unwrap_or_else(|_| crate::config::Settings {
                 interval_secs: crate::config::DEFAULT_INTERVAL,
                 autostart: false,
-                startup_remind: true,
             });
         let interval_index = INTERVALS
             .iter()
@@ -54,30 +53,6 @@ impl Render for SettingsWindow {
                     if let Ok(mut store) = store.lock() {
                         store.settings.autostart = !store.settings.autostart;
                         platform::set_autostart(store.settings.autostart);
-                        save_store(&store);
-                    }
-                    cx.notify();
-                }),
-            );
-
-        let store = self.store.clone();
-        let startup_remind = div()
-            .id("startup-remind-setting")
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_3()
-            .rounded_md()
-            .hover(|s| s.bg(rgb(0x292929)))
-            .cursor_pointer()
-            .child(setting_copy("启动时立即提醒", "应用启动后立刻显示一次提醒"))
-            .child(switch(settings.startup_remind))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_, _, _, cx| {
-                    if let Ok(mut store) = store.lock() {
-                        store.settings.startup_remind = !store.settings.startup_remind;
                         save_store(&store);
                     }
                     cx.notify();
@@ -179,8 +154,7 @@ impl Render for SettingsWindow {
                             .mb_2()
                             .child("启动"),
                     )
-                    .child(autostart)
-                    .child(startup_remind),
+                    .child(autostart),
             )
     }
 }

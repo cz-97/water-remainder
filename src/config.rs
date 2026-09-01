@@ -16,7 +16,6 @@ pub const INTERVALS: &[(u64, &str)] = intervals![15, 30, 45, 60, 75, 90];
 pub struct Settings {
     pub interval_secs: u64,
     pub autostart: bool,
-    pub startup_remind: bool,
 }
 pub struct Store {
     pub settings: Settings,
@@ -43,7 +42,6 @@ pub fn load_store() -> Store {
         settings: Settings {
             interval_secs: DEFAULT_INTERVAL,
             autostart: false,
-            startup_remind: true,
         },
         drinks: Vec::new(),
         window_state: None,
@@ -56,7 +54,6 @@ pub fn load_store() -> Store {
                     s.settings.interval_secs = v.parse().unwrap_or(DEFAULT_INTERVAL).max(60)
                 }
                 (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
-                (Some("startup_remind"), Some(v)) => s.settings.startup_remind = v == "true",
                 (Some("drink"), Some(v)) => {
                     if let Ok(t) = v.parse() {
                         s.drinks.push(t)
@@ -97,8 +94,8 @@ pub fn save_store(s: &Store) {
         let _ = fs::create_dir_all(d);
     }
     let mut out = format!(
-        "interval={}\nautostart={}\nstartup_remind={}\n",
-        s.settings.interval_secs, s.settings.autostart, s.settings.startup_remind
+        "interval={}\nautostart={}\n",
+        s.settings.interval_secs, s.settings.autostart
     );
     if let Some(w) = s.window_state {
         out.push_str(&format!(

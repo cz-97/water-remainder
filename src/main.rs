@@ -16,13 +16,13 @@ use gpui::App;
 use gpui_platform::application;
 use main_window::open_main_window;
 use reminder_window::open_reminder_window;
+use scheduler::delay_from_last_drink;
 use scheduler::{AppCmd, start_scheduler};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
-use ui::now;
 
 enum AppEvent {
     Tray(TrayIconEvent),
@@ -47,17 +47,21 @@ fn main() {
             platform::set_autostart(settings.autostart);
             let (tray, show, quit) = setup_tray();
             std::mem::forget(tray);
-            let first_delay = first_reminder_delay(&store, settings.interval_secs);
-            let remind_on_start = first_delay.is_zero();
-            let initial_delay = if remind_on_start {
-                Duration::from_secs(settings.interval_secs)
-            } else {
-                first_delay
-            };
-            let (scheduler_tx, alarm_rx) = start_scheduler(&settings, initial_delay);
-            if remind_on_start {
-                let _ = scheduler_tx.send(AppCmd::Trigger);
-            }
+            let (scheduler_tx, alarm_rx) =
+                start_scheduler(&settings, first_reminder_delay(&store, settings.interval_secs));
+            // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。
+            let wake_tx = scheduler_tx.clone();
+            let wake_store = store.clone();
+            let _wake_subscription = cx.on_system_wake(move |_| {
+                let (interval_secs, last_drink) = match wake_store.lock() {
+                    Ok(s) => (s.settings.interval_secs, s.drinks.iter().max().copied()),
+                    Err(_) => (crate::config::DEFAULT_INTERVAL, None),
+                };
+                let _ = wake_tx.send(AppCmd::Reschedule {
+                    interval: Duration::from_secs(interval_secs),
+                    delay: delay_from_last_drink(last_drink, interval_secs),
+                });
+            });
             let show_id = show.id().clone();
             let quit_id = quit.id().clone();
             let shared = store.clone();
@@ -131,9 +135,6 @@ fn first_reminder_delay(store: &Arc<Mutex<Store>>, interval_secs: u64) -> Durati
     let Ok(store) = store.lock() else {
         return Duration::from_secs(interval_secs);
     };
-    let Some(&last_drink) = store.drinks.iter().max() else {
-        return Duration::from_secs(interval_secs);
-    };
-    let elapsed = now().saturating_sub(last_drink);
-    Duration::from_secs(interval_secs.saturating_sub(elapsed))
+    let last_drink = store.drinks.iter().max().copied();
+    delay_from_last_drink(last_drink, interval_secs)
 }

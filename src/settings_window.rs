@@ -1,7 +1,7 @@
 use crate::{
     config::{INTERVALS, Store, save_store},
     platform,
-    scheduler::AppCmd,
+    scheduler::{AppCmd, delay_from_last_drink},
     ui::window_button,
 };
 use gpui::{
@@ -223,7 +223,11 @@ fn set_interval(store: &Arc<Mutex<Store>>, scheduler: &mpsc::Sender<AppCmd>, ind
     if let Ok(mut store) = store.lock() {
         store.settings.interval_secs = seconds;
         save_store(&store);
-        let _ = scheduler.send(AppCmd::Reset(Duration::from_secs(seconds)));
+        let last_drink = store.drinks.iter().max().copied();
+        let _ = scheduler.send(AppCmd::Reschedule {
+            interval: Duration::from_secs(seconds),
+            delay: delay_from_last_drink(last_drink, seconds),
+        });
     }
 }
 

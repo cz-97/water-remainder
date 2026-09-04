@@ -1,5 +1,6 @@
 use crate::{
     config::{Store, WindowState, save_store},
+    data::load_timestamps,
     scheduler::AppCmd,
     settings_window::{close_settings_window, open_settings_window},
     ui::{
@@ -27,21 +28,21 @@ impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let today = local_date(now());
         let selected = self.selected_date;
-        let drinks = self
-            .store
-            .lock()
-            .map(|s| s.drinks.clone())
-            .unwrap_or_default();
-        let selected_drinks: Vec<u64> = drinks
+        let timestamps = load_timestamps();
+        let selected_timestamps: Vec<u64> = timestamps
             .iter()
             .copied()
             .filter(|t| local_date(*t) == selected)
             .collect();
         let mut drink_counts = HashMap::new();
-        for timestamp in &drinks {
+        for timestamp in &timestamps {
             *drink_counts.entry(local_date(*timestamp)).or_insert(0usize) += 1;
         }
-        let earliest = drinks.iter().map(|t| local_date(*t)).min().unwrap_or(today);
+        let earliest = timestamps
+            .iter()
+            .map(|t| local_date(*t))
+            .min()
+            .unwrap_or(today);
         let earliest_month_start = earliest.with_day(1).unwrap_or(earliest);
         let day_count = today
             .signed_duration_since(earliest_month_start)
@@ -94,10 +95,10 @@ impl Render for MainWindow {
         let calendar = calendar.mt_4();
 
         let mut records = div().flex().flex_col().gap_2().mt_3();
-        if selected_drinks.is_empty() {
+        if selected_timestamps.is_empty() {
             records = records.child(div().text_color(rgb(0x94a3b8)).child("这天没有喝水记录"));
         } else {
-            for timestamp in selected_drinks.iter().rev() {
+            for timestamp in selected_timestamps.iter().rev() {
                 let text = if selected == today {
                     format!(
                         "{}  ·  {}",

@@ -1,5 +1,5 @@
 use crate::{
-    config::{Store, load_store, save_store},
+    data::{get_last_time, save_time},
     scheduler::AppCmd,
     ui::now,
 };
@@ -8,18 +8,16 @@ use gpui::{
     WindowBounds, WindowKind, WindowOptions, div, hsla, img, prelude::*, rgb,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::time::Duration;
 
 pub struct ReminderWindow {
     scheduler: mpsc::Sender<AppCmd>,
-    store: Arc<Mutex<Store>>,
     reminder_status: String,
 }
 impl Render for ReminderWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tx = self.scheduler.clone();
-        let store = self.store.clone();
         let drink = div()
             .px_10()
             .py_4()
@@ -33,13 +31,8 @@ impl Render for ReminderWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, _, w, _| {
-                    if let Ok(mut s) = store.lock() {
-                        s.drinks.push(now());
-                        save_store(&s);
-                    }
-                    let _ = tx.send(AppCmd::Reset(Duration::from_secs(
-                        load_store().settings.interval_secs,
-                    )));
+                    save_time();
+                    let _ = tx.send(AppCmd::Reschedule);
                     w.remove_window();
                 }),
             );
@@ -90,12 +83,7 @@ impl Render for ReminderWindow {
             .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-pub fn open_reminder_window(
-    cx: &mut App,
-    tx: mpsc::Sender<AppCmd>,
-    store: Arc<Mutex<Store>>,
-    remaining: Duration,
-) {
+pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: Duration) {
     if cx
         .windows()
         .iter()
@@ -108,7 +96,7 @@ pub fn open_reminder_window(
         None => return,
     };
     let bounds = display.bounds();
-    let reminder_status = reminder_status(&store, now(), remaining);
+    let reminder_status = reminder_status(now(), remaining);
     let handle = cx
         .open_window(
             WindowOptions {
@@ -124,7 +112,6 @@ pub fn open_reminder_window(
             move |_, cx| {
                 cx.new(|_| ReminderWindow {
                     scheduler: tx,
-                    store,
                     reminder_status,
                 })
             },
@@ -144,13 +131,9 @@ pub fn open_reminder_window(
     }
 }
 
-fn reminder_status(store: &Arc<Mutex<Store>>, opened_at: u64, remaining: Duration) -> String {
-    let Ok(store) = store.lock() else {
-        return "将于下个提醒间隔后再次提醒您".into();
-    };
-
+fn reminder_status(opened_at: u64, remaining: Duration) -> String {
     let remaining_minutes = remaining.as_secs().div_ceil(60);
-    let Some(&last_drink) = store.drinks.iter().max() else {
+    let Some(last_drink) = get_last_time() else {
         return format!(
             "您还没有喝水记录，将于{}分钟后再次提醒您",
             remaining_minutes

@@ -1,7 +1,7 @@
 use crate::{
     config::{INTERVALS, Store, save_store},
     platform,
-    scheduler::{AppCmd, delay_from_last_drink},
+    scheduler::AppCmd,
     ui::window_button,
 };
 use gpui::{
@@ -9,7 +9,6 @@ use gpui::{
     WindowKind, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
 
 pub struct SettingsWindow {
     store: Arc<Mutex<Store>>,
@@ -223,11 +222,7 @@ fn set_interval(store: &Arc<Mutex<Store>>, scheduler: &mpsc::Sender<AppCmd>, ind
     if let Ok(mut store) = store.lock() {
         store.settings.interval_secs = seconds;
         save_store(&store);
-        let last_drink = store.drinks.iter().max().copied();
-        let _ = scheduler.send(AppCmd::Reschedule {
-            interval: Duration::from_secs(seconds),
-            delay: delay_from_last_drink(last_drink, seconds),
-        });
+        let _ = scheduler.send(AppCmd::Reschedule);
     }
 }
 

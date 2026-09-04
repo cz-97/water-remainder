@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod config;
+mod data;
 mod main_window;
 mod platform;
 mod reminder_window;
@@ -9,14 +10,13 @@ mod settings_window;
 mod tray;
 mod ui;
 
-use config::{Store, load_store};
+use config::load_store;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
 use gpui::App;
 use gpui_platform::application;
 use main_window::open_main_window;
 use reminder_window::open_reminder_window;
-use scheduler::delay_from_last_drink;
 use scheduler::{AppCmd, start_scheduler};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -47,24 +47,15 @@ fn main() {
             platform::set_autostart(settings.autostart);
             let (tray, show, quit) = setup_tray();
             std::mem::forget(tray);
-            let (scheduler_tx, alarm_rx) =
-                start_scheduler(&settings, first_reminder_delay(&store, settings.interval_secs));
+            let (scheduler_tx, alarm_rx) = start_scheduler();
             // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。
             let wake_tx = scheduler_tx.clone();
-            let wake_store = store.clone();
             let _wake_subscription = cx.on_system_wake(move |_| {
-                let (interval_secs, last_drink) = match wake_store.lock() {
-                    Ok(s) => (s.settings.interval_secs, s.drinks.iter().max().copied()),
-                    Err(_) => (crate::config::DEFAULT_INTERVAL, None),
-                };
-                let _ = wake_tx.send(AppCmd::Reschedule {
-                    interval: Duration::from_secs(interval_secs),
-                    delay: delay_from_last_drink(last_drink, interval_secs),
-                });
+                let _ = wake_tx.send(AppCmd::Reschedule);
             });
             let show_id = show.id().clone();
             let quit_id = quit.id().clone();
-            let shared = store.clone();
+            let shared_store = store.clone();
             let (event_tx, event_rx) = unbounded();
             let tray_tx = event_tx.clone();
             TrayIconEvent::set_event_handler(Some(move |event| {
@@ -93,7 +84,7 @@ fn main() {
                                 ..
                             } = event
                             {
-                                let records = shared.clone();
+                                let records = shared_store.clone();
                                 let _ = cx.update(|cx| {
                                     open_main_window(cx, records, scheduler_tx.clone())
                                 });
@@ -112,7 +103,7 @@ fn main() {
                             }
                         }
                         AppEvent::Alarm(AppCmd::ShowOverlay(remaining)) => {
-                            show_reminder(cx, scheduler_tx.clone(), shared.clone(), remaining);
+                            show_reminder(cx, scheduler_tx.clone(), remaining);
                         }
                         AppEvent::Alarm(_) => {}
                     }
@@ -122,19 +113,6 @@ fn main() {
         });
 }
 
-fn show_reminder(
-    cx: &mut gpui::AsyncApp,
-    scheduler: mpsc::Sender<AppCmd>,
-    store: Arc<Mutex<Store>>,
-    remaining: Duration,
-) {
-    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, store, remaining));
-}
-
-fn first_reminder_delay(store: &Arc<Mutex<Store>>, interval_secs: u64) -> Duration {
-    let Ok(store) = store.lock() else {
-        return Duration::from_secs(interval_secs);
-    };
-    let last_drink = store.drinks.iter().max().copied();
-    delay_from_last_drink(last_drink, interval_secs)
+fn show_reminder(cx: &mut gpui::AsyncApp, scheduler: mpsc::Sender<AppCmd>, remaining: Duration) {
+    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
 }

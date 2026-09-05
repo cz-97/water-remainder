@@ -14,23 +14,22 @@ pub fn get_deadline() -> (Duration, SystemTime) {
     let interval_secs = load_store().settings.interval_secs;
     let interval = Duration::from_secs(interval_secs);
     let now = SystemTime::now();
-    match get_last_time() {
-        Some(last_time) => {
-            let since = now
-                .duration_since(UNIX_EPOCH)
+    if let Some(last_time) = get_last_time() {
+        return (interval, now + Duration::from_secs(interval_secs.saturating_sub(
+            now.duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or_default()
-                .saturating_sub(last_time);
-            let remaining = interval_secs.saturating_sub(since);
-            (interval, now + Duration::from_secs(remaining))
-        }
-        None => (interval, now + interval),
+                .saturating_sub(last_time),
+        )));
     }
+    (interval, now + interval)
 }
 
 pub enum AppCmd {
     /// 启动 / 睡眠唤醒 / 修改提醒间隔时/ 用户喝水后重排到 `now + delay`。
     Reschedule,
+    /// 重置提醒间隔为完整间隔。
+    Reset,
     Stop,
     Trigger,
     ShowOverlay(Duration),
@@ -50,6 +49,9 @@ pub fn start_scheduler() -> (mpsc::Sender<AppCmd>, mpsc::Receiver<AppCmd>) {
                 match cr.recv_timeout(wait) {
                     Ok(AppCmd::Reschedule) => {
                         (interval, deadline) = get_deadline();
+                    }
+                    Ok(AppCmd::Reset) => {
+                        deadline = SystemTime::now() + interval;
                     }
                     Ok(AppCmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {

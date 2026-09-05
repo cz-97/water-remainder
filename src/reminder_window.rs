@@ -32,7 +32,7 @@ impl Render for ReminderWindow {
                 MouseButton::Left,
                 cx.listener(move |_, _, w, _| {
                     save_time();
-                    let _ = tx.send(AppCmd::Reschedule);
+                    let _ = tx.send(AppCmd::Reset);
                     w.remove_window();
                 }),
             );

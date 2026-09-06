@@ -1,7 +1,6 @@
 use crate::{
-    data::{get_last_time, save_time},
-    scheduler::AppCmd,
-    ui::now,
+    data::{get_elapsed, save_time},
+    scheduler::{AppCmd, RescheduleType},
 };
 use gpui::{
     App, Context, Image, ImageFormat, MouseButton, Rems, Window, WindowBackgroundAppearance,
@@ -9,7 +8,6 @@ use gpui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::mpsc;
-use std::time::Duration;
 
 pub struct ReminderWindow {
     scheduler: mpsc::Sender<AppCmd>,
@@ -32,7 +30,7 @@ impl Render for ReminderWindow {
                 MouseButton::Left,
                 cx.listener(move |_, _, w, _| {
                     save_time();
-                    let _ = tx.send(AppCmd::Reset);
+                    let _ = tx.send(AppCmd::Reschedule(RescheduleType::Drink));
                     w.remove_window();
                 }),
             );
@@ -83,7 +81,7 @@ impl Render for ReminderWindow {
             .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: Duration) {
+pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: u64) {
     if cx
         .windows()
         .iter()
@@ -96,7 +94,10 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: D
         None => return,
     };
     let bounds = display.bounds();
-    let reminder_status = reminder_status(now(), remaining);
+    let reminder_status = (match get_elapsed() {
+        Some(elapsed_secs) => format!("您在{}分钟前喝过水", elapsed_secs.div_euclid(60)),
+        None => "您还没有喝水记录".to_string(),
+    }) + &format!("，将于{}分钟后再次提醒您", remaining.div_ceil(60));
     let handle = cx
         .open_window(
             WindowOptions {
@@ -129,21 +130,4 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: D
             }
         });
     }
-}
-
-fn reminder_status(opened_at: u64, remaining: Duration) -> String {
-    let remaining_minutes = remaining.as_secs().div_ceil(60);
-    let Some(last_drink) = get_last_time() else {
-        return format!(
-            "您还没有喝水记录，将于{}分钟后再次提醒您",
-            remaining_minutes
-        );
-    };
-
-    let elapsed_secs = opened_at.saturating_sub(last_drink);
-    let elapsed_minutes = elapsed_secs / 60;
-    format!(
-        "您在{}分钟前喝过水，将于{}分钟后再次提醒您",
-        elapsed_minutes, remaining_minutes
-    )
 }

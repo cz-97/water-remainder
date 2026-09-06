@@ -17,9 +17,8 @@ use gpui::App;
 use gpui_platform::application;
 use main_window::open_main_window;
 use reminder_window::open_reminder_window;
-use scheduler::{AppCmd, start_scheduler};
+use scheduler::{AppCmd, RescheduleType, start_scheduler};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
 use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -51,7 +50,7 @@ fn main() {
             // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。
             let wake_tx = scheduler_tx.clone();
             let _wake_subscription = cx.on_system_wake(move |_| {
-                let _ = wake_tx.send(AppCmd::Reschedule);
+                let _ = wake_tx.send(AppCmd::Reschedule(RescheduleType::Wake));
             });
             let show_id = show.id().clone();
             let quit_id = quit.id().clone();
@@ -113,6 +112,6 @@ fn main() {
         });
 }
 
-fn show_reminder(cx: &mut gpui::AsyncApp, scheduler: mpsc::Sender<AppCmd>, remaining: Duration) {
+fn show_reminder(cx: &mut gpui::AsyncApp, scheduler: mpsc::Sender<AppCmd>, remaining: u64) {
     let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
 }

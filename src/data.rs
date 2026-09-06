@@ -54,27 +54,25 @@ pub fn load_timestamps() -> Vec<u64> {
         .collect()
 }
 
-pub fn get_last_time() -> Option<u64> {
-    if let Some(time) = *last_time_cache().read().unwrap() {
-        return Some(time);
+pub fn get_elapsed() -> Option<u64> {
+    let mut time = *last_time_cache().read().unwrap();
+
+    if time.is_none() {
+        let Some(conn) = open_db() else {
+            return None;
+        };
+
+        time = conn
+            .prepare("SELECT timestamp FROM drink_records ORDER BY timestamp DESC LIMIT 1")
+            .ok()?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .ok()
+            .map(|v| v.max(0) as u64);
+
+        *last_time_cache().write().unwrap() = time;
     }
 
-    let Some(conn) = open_db() else {
-        return None;
-    };
-
-    let mut stmt = conn
-        .prepare("SELECT timestamp FROM drink_records ORDER BY timestamp DESC LIMIT 1")
-        .ok()?;
-
-    let time = stmt
-        .query_row([], |row| row.get::<_, i64>(0))
-        .ok()
-        .map(|v| v.max(0) as u64);
-
-    *last_time_cache().write().unwrap() = time;
-
-    time
+    time.map(|time| now().saturating_sub(time))
 }
 
 pub fn save_time() {

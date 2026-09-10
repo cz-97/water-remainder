@@ -7,7 +7,10 @@ use std::{
 
 pub fn get_deadline(interval: Duration) -> SystemTime {
     SystemTime::now()
-        + interval.saturating_sub(Duration::from_secs(get_elapsed().unwrap_or_default()))
+        + match get_elapsed() {
+            Some(elapsed) => interval.saturating_sub(Duration::from_secs(elapsed)),
+            None => Duration::default(),
+        }
 }
 
 pub enum AppCmd {

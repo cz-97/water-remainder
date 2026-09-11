@@ -10,7 +10,7 @@ macro_rules! intervals {
         ]
     };
 }
-pub const INTERVALS: &[(u64, &str)] = intervals![15, 30, 45, 60, 75, 90];
+pub const INTERVALS: &[(u64, &str)] = intervals![15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75];
 
 #[derive(Clone)]
 pub struct Settings {

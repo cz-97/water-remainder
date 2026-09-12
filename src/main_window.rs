@@ -1,6 +1,6 @@
 use crate::{
     config::{Store, WindowState, save_store},
-    data::load_timestamps,
+    data::snapshot,
     scheduler::AppCmd,
     settings_window::{close_settings_window, open_settings_window},
     ui::{
@@ -13,10 +13,7 @@ use gpui::{
     WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, mpsc},
-};
+use std::sync::{Arc, Mutex, mpsc};
 
 pub struct MainWindow {
     store: Arc<Mutex<Store>>,
@@ -28,21 +25,10 @@ impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let today = local_date(now());
         let selected = self.selected_date;
-        let timestamps = load_timestamps();
-        let selected_timestamps: Vec<u64> = timestamps
-            .iter()
-            .copied()
-            .filter(|t| local_date(*t) == selected)
-            .collect();
-        let mut drink_counts = HashMap::new();
-        for timestamp in &timestamps {
-            *drink_counts.entry(local_date(*timestamp)).or_insert(0usize) += 1;
-        }
-        let earliest = timestamps
-            .iter()
-            .map(|t| local_date(*t))
-            .min()
-            .unwrap_or(today);
+        // 全量记录走进程内缓存：首次访问读一次数据库，之后只读内存。
+        // 日历只需要每天的条数，明细留到渲染右侧时间轴时按 selected 现取。
+        let cache = snapshot();
+        let earliest = cache.earliest_day().unwrap_or(today);
         let earliest_month_start = earliest.with_day(1).unwrap_or(earliest);
         let day_count = today
             .signed_duration_since(earliest_month_start)
@@ -60,7 +46,7 @@ impl Render for MainWindow {
             let mut week = div().flex().gap_1();
             for offset in 0..7 {
                 let day = today - DateDuration::days((row * 7 + offset) as i64);
-                let count = drink_counts.get(&day).copied().unwrap_or(0);
+                let count = cache.count(day);
                 let mut cell = div()
                     .w(px(24.))
                     .h(px(24.))
@@ -94,6 +80,8 @@ impl Render for MainWindow {
         }
         let calendar = calendar.mt_4();
 
+        // 右侧时间轴：只在这里按选中的那一天取明细（借用切片，不拷贝）。
+        let selected_timestamps = cache.times(selected);
         let mut records = div().flex().flex_col().gap_2().mt_3();
         if selected_timestamps.is_empty() {
             records = records.child(div().text_color(rgb(0x94a3b8)).child("这天没有喝水记录"));

@@ -1,21 +1,78 @@
-use crate::ui::now;
+use crate::ui::{local_date, now};
+use chrono::NaiveDate;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::PathBuf,
-    sync::{OnceLock, RwLock},
+    sync::{Arc, OnceLock, RwLock},
 };
 
 type DbPool = Pool<SqliteConnectionManager>;
 
 static DB_POOL: OnceLock<DbPool> = OnceLock::new();
 
-static LAST_TIME: OnceLock<RwLock<Option<u64>>> = OnceLock::new();
+/// 全量记录缓存。进程生命周期内只从数据库读取一次，之后仅由 save_time 增量维护。
+static RECORDS: OnceLock<RwLock<Option<Arc<DrinkCache>>>> = OnceLock::new();
 
-fn last_time_cache() -> &'static RwLock<Option<u64>> {
-    LAST_TIME.get_or_init(|| RwLock::new(None))
+fn records_slot() -> &'static RwLock<Option<Arc<DrinkCache>>> {
+    RECORDS.get_or_init(|| RwLock::new(None))
+}
+
+/// 按本地日期分桶的喝水记录，桶内时间戳升序。
+#[derive(Clone, Default)]
+pub struct DrinkCache {
+    by_day: BTreeMap<NaiveDate, Vec<u64>>,
+}
+
+impl DrinkCache {
+    fn from_timestamps(timestamps: impl IntoIterator<Item = u64>) -> Self {
+        let mut all: Vec<u64> = timestamps.into_iter().collect();
+        all.sort_unstable();
+
+        let mut by_day: BTreeMap<NaiveDate, Vec<u64>> = BTreeMap::new();
+        for timestamp in all {
+            by_day.entry(local_date(timestamp)).or_default().push(timestamp);
+        }
+        Self { by_day }
+    }
+
+    /// 某天喝了多少次。
+    pub fn count(&self, day: NaiveDate) -> usize {
+        self.by_day.get(&day).map_or(0, Vec::len)
+    }
+
+    /// 某天的全部记录（升序）。
+    pub fn times(&self, day: NaiveDate) -> &[u64] {
+        self.by_day.get(&day).map_or(&[], Vec::as_slice)
+    }
+
+    /// 最早有记录的那一天。
+    pub fn earliest_day(&self) -> Option<NaiveDate> {
+        self.by_day.keys().next().copied()
+    }
+
+    /// 全部记录中最近的一次。
+    pub fn last_time(&self) -> Option<u64> {
+        self.by_day
+            .values()
+            .next_back()
+            .and_then(|bucket| bucket.last().copied())
+    }
+
+    /// 把新记录放进所属日期的桶里，保持桶内升序（正常时钟下即尾部追加）。
+    fn insert(&mut self, timestamp: u64) {
+        let bucket = self.by_day.entry(local_date(timestamp)).or_default();
+        match bucket.last() {
+            Some(&last) if last > timestamp => {
+                let pos = bucket.partition_point(|&t| t <= timestamp);
+                bucket.insert(pos, timestamp);
+            }
+            _ => bucket.push(timestamp),
+        }
+    }
 }
 
 fn data_file() -> PathBuf {
@@ -74,7 +131,8 @@ fn get_conn() -> Option<PooledConnection<SqliteConnectionManager>> {
     db_pool().get().ok()
 }
 
-pub fn load_timestamps() -> Vec<u64> {
+/// 唯一一次全量读库。
+fn query_all_timestamps() -> Vec<u64> {
     let Some(conn) = get_conn() else {
         return Vec::new();
     };
@@ -97,28 +155,28 @@ pub fn load_timestamps() -> Vec<u64> {
         .collect()
 }
 
-pub fn get_elapsed() -> Option<u64> {
-    let mut time = *last_time_cache().read().unwrap();
-
-    if time.is_none() {
-        time = get_conn()?
-            .prepare(
-                "SELECT timestamp
-                FROM drink_records
-                ORDER BY timestamp DESC
-                LIMIT 1",
-            )
-            .ok()?
-            .query_row([], |row| row.get::<_, i64>(0))
-            .ok()
-            .map(|v| v.max(0) as u64);
-
-        *last_time_cache().write().unwrap() = time;
+/// 取记录缓存。首次调用时全量加载数据库，之后永远命中内存。
+pub fn snapshot() -> Arc<DrinkCache> {
+    if let Some(cache) = records_slot().read().unwrap().as_ref() {
+        return cache.clone();
     }
 
-    time.map(|time| now().saturating_sub(time))
+    // 首帧之前先在写锁内完成加载，保证全进程只产生这一次 SELECT。
+    let mut slot = records_slot().write().unwrap();
+    if slot.is_none() {
+        *slot = Some(Arc::new(DrinkCache::from_timestamps(query_all_timestamps())));
+    }
+    slot.as_ref().unwrap().clone()
 }
 
+/// 最近一次喝水距今的秒数。直接从记录缓存取，不再单独维护一份「上次时间」。
+pub fn get_elapsed() -> Option<u64> {
+    snapshot()
+        .last_time()
+        .map(|time| now().saturating_sub(time))
+}
+
+/// 落库一次喝水记录，并同步进内存缓存（不触发任何回读）。
 pub fn save_time() {
     let Some(conn) = get_conn() else {
         return;
@@ -133,6 +191,9 @@ pub fn save_time() {
         )
         .is_ok()
     {
-        *last_time_cache().write().unwrap() = Some(timestamp);
+        // 缓存尚未建立时无需处理：之后的首次全量加载会包含这条记录。
+        if let Some(cache) = records_slot().write().unwrap().as_mut() {
+            Arc::make_mut(cache).insert(timestamp);
+        }
     }
 }

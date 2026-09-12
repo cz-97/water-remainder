@@ -6,7 +6,7 @@
 
 ## 功能
 
-- **定时提醒** — 到点后全屏透明浮层提示「该喝水了」，可选择「喝了」或「跳过」
+- **定时提醒** — 到点后全屏透明浮层提示「该喝水了」，可选择「喝了」或「跳过」；浮层上「上次喝水 / 下次提醒」两处倒计时按秒实时跳动，并附具体时刻
 - **智能顺延** — 提醒时间基于**最近一次喝水记录**计算；休眠唤醒后自动重新计算，不会因为合盖而漏提醒
 - **喝水记录** — 每次打卡写入本地 SQLite，主窗口以日历热力图 + 当日时间轴展示
 - **间隔可调** — 15 ~ 75 分钟，步进式调节（默认 45 分钟）
@@ -122,10 +122,14 @@
 
 - `main_window.rs` — 记录总览。日历按「今天向前倒推」逐行生成（每行 7 天，行内首次遇到 `day == 1` 时标注月份），配色由 `ui::calendar_color()` 按当日次数映射到蓝色梯度，形成 GitHub 贡献图式热力图；右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
   - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` 三个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `cache.count(day)`（返回 `usize`）上色；选中日期的明细列表则按 `selected_date` 现取 `cache.times(day)`（借用切片，不拷贝），点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
-- `reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。渲染前先算出「上次喝水 / 下次提醒」两句文案；「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
+- `reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
+  - **两处倒计时按秒跳动**。实体创建时 `cx.spawn` 起一个 1 秒周期的后台定时任务，每轮醒来 `cx.notify()` 触发重绘（`notify` → `invalidate_view` 置窗口 dirty 并唤醒平台 waker → 下一帧重跑 `render`）。窗口关闭后弱引用升级失败，任务自行退出，不会泄漏。
+  - 文案形如 `您在 1 天 2 小时 15 分 30 秒前喝过水（昨天 15:04:32），将于 12 分 3 秒后再次提醒您（15:37:11）`。时间一律写到秒，并用「从最大非零单位一路展开到秒」的写法，避免出现「1 小时 59 秒」这种有歧义的省略。
+  - 括号内是具体时刻 `HH:MM:SS`；日期用相对词表示——当天省略、`昨天`、`前天`、`N 天前`。下次提醒的时刻始终不写日期。
+  - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
 - `settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。修改间隔会同时落盘、改注册表、并向调度器发送 `ChangeInterval`。
 
-`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `relative_to_now`）、热力图调色板、以及自绘标题栏按钮 `window_button`（用 `Segoe Fluent Icons` 字体 + `WindowControlArea` 实现拖拽与最小化/最大化/关闭）。
+`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、热力图调色板、以及自绘标题栏按钮 `window_button`（用 `Segoe Fluent Icons` 字体 + `WindowControlArea` 实现拖拽与最小化/最大化/关闭）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
 **5. 平台适配层（`platform.rs`）**
 

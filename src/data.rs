@@ -169,11 +169,14 @@ pub fn snapshot() -> Arc<DrinkCache> {
     slot.as_ref().unwrap().clone()
 }
 
+/// 全部记录中最近的一次喝水时间戳。
+pub fn last_time() -> Option<u64> {
+    snapshot().last_time()
+}
+
 /// 最近一次喝水距今的秒数。直接从记录缓存取，不再单独维护一份「上次时间」。
 pub fn get_elapsed() -> Option<u64> {
-    snapshot()
-        .last_time()
-        .map(|time| now().saturating_sub(time))
+    last_time().map(|time| now().saturating_sub(time))
 }
 
 /// 落库一次喝水记录，并同步进内存缓存（不触发任何回读）。

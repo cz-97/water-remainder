@@ -18,6 +18,42 @@ pub fn format_clock(timestamp: u64) -> String {
         .map(|d| d.with_timezone(&Local).format("%H:%M").to_string())
         .unwrap_or_else(|| "--:--".into())
 }
+/// 带秒的时钟，用于提醒浮层里括号内的「具体时间」。
+pub fn format_clock_secs(timestamp: u64) -> String {
+    DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+        .map(|d| d.with_timezone(&Local).format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "--:--:--".into())
+}
+/// 把秒数写成「1 天 2 小时 15 分 30 秒」：从最大非零单位一路展开到秒，
+/// 保证文本每秒都会变化，同时不会出现「1 小时 59 秒」这种有歧义的省略写法。
+pub fn format_span(seconds: u64) -> String {
+    let (days, rest) = (seconds / 86_400, seconds % 86_400);
+    let (hours, rest) = (rest / 3_600, rest % 3_600);
+    let (minutes, secs) = (rest / 60, rest % 60);
+
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{} 天", days));
+        parts.push(format!("{} 小时", hours));
+        parts.push(format!("{} 分", minutes));
+    } else if hours > 0 {
+        parts.push(format!("{} 小时", hours));
+        parts.push(format!("{} 分", minutes));
+    } else if minutes > 0 {
+        parts.push(format!("{} 分", minutes));
+    }
+    parts.push(format!("{} 秒", secs));
+    parts.join(" ")
+}
+/// 相对日期前缀：当天为空串，之后是「昨天 」/「前天 」/「N 天前 」。
+pub fn format_day_label(day: NaiveDate, today: NaiveDate) -> String {
+    match today.signed_duration_since(day).num_days() {
+        days if days <= 0 => String::new(),
+        1 => "昨天 ".into(),
+        2 => "前天 ".into(),
+        days => format!("{} 天前 ", days),
+    }
+}
 pub fn relative_to_now(timestamp: u64) -> String {
     let seconds = now().saturating_sub(timestamp);
     if seconds < 60 {

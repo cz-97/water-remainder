@@ -82,6 +82,28 @@ pub fn calendar_color(count: usize) -> gpui::Rgba {
     }
 }
 
+/// 两个窗口共用的自绘标题栏：左侧可拖拽的标题，右侧由调用方传入按钮组。
+pub fn titlebar(title: &'static str, actions: impl IntoElement) -> impl IntoElement {
+    div()
+        .h(px(38.))
+        .flex()
+        .items_center()
+        .bg(rgb(0x1d1d1d))
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .px_4()
+                .text_color(rgb(0xe0f2fe))
+                .font_weight(gpui::FontWeight::BOLD)
+                .window_control_area(WindowControlArea::Drag)
+                .child(title),
+        )
+        .child(actions)
+}
+
 pub fn window_button(label: &'static str, area: WindowControlArea) -> impl IntoElement {
     let hover = if area == WindowControlArea::Close {
         rgb(0xdc2626)

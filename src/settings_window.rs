@@ -2,7 +2,7 @@ use crate::{
     config::{INTERVALS, Store, save_store},
     platform,
     scheduler::{AppCmd, RescheduleType},
-    ui::window_button,
+    ui::{titlebar, window_button},
 };
 use gpui::{
     App, Context, MouseButton, Window, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
@@ -27,7 +27,7 @@ impl Render for SettingsWindow {
             });
         let interval_index = INTERVALS
             .iter()
-            .position(|(seconds, _)| *seconds == settings.interval_secs)
+            .position(|seconds| *seconds == settings.interval_secs)
             .unwrap_or(0);
         let can_decrease = interval_index > 0;
         let can_increase = interval_index + 1 < INTERVALS.len();
@@ -104,24 +104,7 @@ impl Render for SettingsWindow {
             .child(setting_copy("提醒间隔", "两次提醒之间的等待时间"))
             .child(interval);
 
-        let titlebar = div()
-            .h(px(38.))
-            .flex()
-            .items_center()
-            .bg(rgb(0x1d1d1d))
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .px_4()
-                    .text_color(rgb(0xe0f2fe))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .window_control_area(WindowControlArea::Drag)
-                    .child("设置"),
-            )
-            .child(window_button("\u{e8bb}", WindowControlArea::Close));
+        let title_bar = titlebar("设置", window_button("\u{e8bb}", WindowControlArea::Close));
 
         div()
             .size_full()
@@ -129,7 +112,7 @@ impl Render for SettingsWindow {
             .flex_col()
             .bg(rgb(0x1f1f1f))
             .text_color(rgb(0xe5e7eb))
-            .child(titlebar)
+            .child(title_bar)
             .child(
                 div()
                     .flex_1()
@@ -216,7 +199,7 @@ fn step_button(label: &'static str, enabled: bool) -> gpui::Div {
 }
 
 fn set_interval(store: &Arc<Mutex<Store>>, scheduler: &mpsc::Sender<AppCmd>, index: usize) {
-    let Some(&(seconds, _)) = INTERVALS.get(index) else {
+    let Some(&seconds) = INTERVALS.get(index) else {
         return;
     };
     if let Ok(mut store) = store.lock() {

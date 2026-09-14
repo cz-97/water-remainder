@@ -1,3 +1,4 @@
+use crate::paths::app_dir;
 use crate::ui::{local_date, now};
 use chrono::NaiveDate;
 use r2d2::{Pool, PooledConnection};
@@ -5,7 +6,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
 use std::{
     collections::BTreeMap,
-    env, fs,
+    fs,
     path::PathBuf,
     sync::{Arc, OnceLock, RwLock},
 };
@@ -76,12 +77,7 @@ impl DrinkCache {
 }
 
 fn data_file() -> PathBuf {
-    let base = env::var_os("APPDATA")
-        .or_else(|| env::var_os("LOCALAPPDATA"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    base.join("water-remainder").join("data.db")
+    app_dir().join("data.db")
 }
 
 fn init_database(conn: &rusqlite::Connection) -> rusqlite::Result<()> {

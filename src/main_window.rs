@@ -4,7 +4,8 @@ use crate::{
     scheduler::AppCmd,
     settings_window::{close_settings_window, open_settings_window},
     ui::{
-        calendar_color, format_clock, format_date, local_date, now, relative_to_now, window_button,
+        calendar_color, format_clock, format_date, local_date, now, relative_to_now, titlebar,
+        window_button,
     },
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
@@ -12,7 +13,6 @@ use gpui::{
     App, Bounds, Context, MouseButton, Window, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::{Arc, Mutex, mpsc};
 
 pub struct MainWindow {
@@ -106,23 +106,9 @@ impl Render for MainWindow {
                 );
             }
         }
-        let titlebar = div()
-            .h(px(38.))
+        let title_actions = div()
             .flex()
             .items_center()
-            .bg(rgb(0x1d1d1d))
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .px_4()
-                    .text_color(rgb(0xe0f2fe))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .window_control_area(WindowControlArea::Drag)
-                    .child("喝水提醒"),
-            )
             .child(
                 div()
                     .id("settings-button")
@@ -154,6 +140,7 @@ impl Render for MainWindow {
                 WindowControlArea::Max,
             ))
             .child(window_button("\u{e8bb}", WindowControlArea::Close));
+        let title_bar = titlebar("喝水提醒", title_actions);
 
         div()
             .size_full()
@@ -161,7 +148,7 @@ impl Render for MainWindow {
             .flex_col()
             .bg(rgb(0x1f1f1f))
             .text_color(rgb(0xe5e7eb))
-            .child(titlebar)
+            .child(title_bar)
             .child(
                 div()
                     .flex()
@@ -209,53 +196,45 @@ impl Render for MainWindow {
     }
 }
 
+/// 当前窗口的位置/尺寸/最大化状态，落盘与关闭时共用同一份采集逻辑。
+fn capture_window_state(window: &Window) -> WindowState {
+    let (bounds, maximized) = match window.window_bounds() {
+        WindowBounds::Windowed(bounds) => (bounds, false),
+        WindowBounds::Maximized(bounds) => (bounds, true),
+        WindowBounds::Fullscreen(bounds) => (bounds, false),
+    };
+    WindowState {
+        x: bounds.origin.x.as_f32(),
+        y: bounds.origin.y.as_f32(),
+        width: bounds.size.width.as_f32(),
+        height: bounds.size.height.as_f32(),
+        maximized,
+    }
+}
+
 pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>, scheduler: mpsc::Sender<AppCmd>) {
     if let Some(handle) = cx.windows().iter().find_map(|w| w.downcast::<MainWindow>()) {
         let _ = handle.update(cx, |_, window, _| {
-            #[cfg(windows)]
-            if let Ok(handle) = window.window_handle() {
-                if let RawWindowHandle::Win32(value) = handle.as_raw() {
-                    crate::platform::show_main_window(windows::Win32::Foundation::HWND(
-                        value.hwnd.get() as *mut _,
-                    ));
-                }
-            }
+            crate::platform::show_main_window(window);
             window.activate_window();
         });
         return;
     }
-    create_main_window(cx, store, scheduler, true);
+    create_main_window(cx, store, scheduler);
 }
 
 pub fn save_main_window_state(cx: &mut App) {
     if let Some(handle) = cx.windows().iter().find_map(|w| w.downcast::<MainWindow>()) {
         let _ = handle.update(cx, |view, window, _| {
-            let bounds = window.window_bounds();
-            let (bounds, maximized) = match bounds {
-                WindowBounds::Windowed(bounds) => (bounds, false),
-                WindowBounds::Maximized(bounds) => (bounds, true),
-                WindowBounds::Fullscreen(bounds) => (bounds, false),
-            };
             if let Ok(mut store) = view.store.lock() {
-                store.window_state = Some(WindowState {
-                    x: bounds.origin.x.as_f32(),
-                    y: bounds.origin.y.as_f32(),
-                    width: bounds.size.width.as_f32(),
-                    height: bounds.size.height.as_f32(),
-                    maximized,
-                });
+                store.window_state = Some(capture_window_state(window));
                 save_store(&store);
             }
         });
     }
 }
 
-fn create_main_window(
-    cx: &mut App,
-    store: Arc<Mutex<Store>>,
-    scheduler: mpsc::Sender<AppCmd>,
-    show: bool,
-) {
+fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, scheduler: mpsc::Sender<AppCmd>) {
     let today = Local::now().date_naive();
     let saved_state = store.lock().ok().and_then(|s| s.window_state);
     let window_bounds = saved_state
@@ -285,7 +264,6 @@ fn create_main_window(
                 is_resizable: true,
                 window_min_size: Some(size(px(500.), px(800.))),
                 window_background: WindowBackgroundAppearance::Opaque,
-                show: show || cfg!(not(windows)),
                 ..Default::default()
             },
             move |window, cx| {
@@ -297,20 +275,8 @@ fn create_main_window(
                 });
                 window.on_window_should_close(cx, move |window, cx| {
                     close_settings_window(cx);
-                    let bounds = window.window_bounds();
-                    let (bounds, maximized) = match bounds {
-                        WindowBounds::Windowed(bounds) => (bounds, false),
-                        WindowBounds::Maximized(bounds) => (bounds, true),
-                        WindowBounds::Fullscreen(bounds) => (bounds, false),
-                    };
                     if let Ok(mut store) = close_store.lock() {
-                        store.window_state = Some(WindowState {
-                            x: bounds.origin.x.as_f32(),
-                            y: bounds.origin.y.as_f32(),
-                            width: bounds.size.width.as_f32(),
-                            height: bounds.size.height.as_f32(),
-                            maximized,
-                        });
+                        store.window_state = Some(capture_window_state(window));
                         save_store(&store);
                     }
                     true
@@ -319,21 +285,10 @@ fn create_main_window(
             },
         )
         .ok();
-    #[cfg(windows)]
     if let Some(handle) = handle {
         let _ = handle.update(cx, |_, window, _| {
-            if let Ok(h) = window.window_handle() {
-                if let RawWindowHandle::Win32(v) = h.as_raw() {
-                    crate::platform::style_main_window(windows::Win32::Foundation::HWND(
-                        v.hwnd.get() as *mut _,
-                    ));
-                    if show {
-                        crate::platform::show_main_window(windows::Win32::Foundation::HWND(
-                            v.hwnd.get() as *mut _,
-                        ));
-                    }
-                }
-            }
+            crate::platform::style_main_window(window);
+            crate::platform::show_main_window(window);
         });
     }
 }

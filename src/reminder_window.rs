@@ -7,9 +7,7 @@ use gpui::{
     App, Context, Image, ImageFormat, MouseButton, Rems, Window, WindowBackgroundAppearance,
     WindowBounds, WindowKind, WindowOptions, div, hsla, img, prelude::*, rgb,
 };
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{sync::mpsc, time::Duration};
-
 pub struct ReminderWindow {
     scheduler: mpsc::Sender<AppCmd>,
     /// 最近一次喝水的时间戳（Unix 秒）。
@@ -162,16 +160,7 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: u
             },
         )
         .ok();
-    #[cfg(windows)]
     if let Some(handle) = handle {
-        let _ = handle.update(cx, |_, window, _| {
-            if let Ok(handle) = window.window_handle() {
-                if let RawWindowHandle::Win32(value) = handle.as_raw() {
-                    crate::platform::strip_win11_chrome(windows::Win32::Foundation::HWND(
-                        value.hwnd.get() as *mut _,
-                    ));
-                }
-            }
-        });
+        let _ = handle.update(cx, |_, window, _| crate::platform::style_reminder_window(window));
     }
 }

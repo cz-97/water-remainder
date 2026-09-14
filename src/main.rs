@@ -3,6 +3,7 @@
 mod config;
 mod data;
 mod main_window;
+mod paths;
 mod platform;
 mod reminder_window;
 mod scheduler;

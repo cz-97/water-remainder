@@ -129,16 +129,17 @@
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
 - `settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。修改间隔会同时落盘、改注册表、并向调度器发送 `ChangeInterval`。
 
-`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、热力图调色板、以及自绘标题栏按钮 `window_button`（用 `Segoe Fluent Icons` 字体 + `WindowControlArea` 实现拖拽与最小化/最大化/关闭）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、热力图调色板 `calendar_color`、以及自绘标题栏的两个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）与 `window_button()`（`Segoe Fluent Icons` 图标 + `WindowControlArea` 的最小化/最大化/关闭）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
 **5. 平台适配层（`platform.rs`）**
 
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
-- `strip_win11_chrome` / `style_main_window` — 通过 DWM 设置窗口圆角（浮层直角、主窗圆角）并去掉系统描边
+- 对外接口一律接收 `&gpui::Window`，原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
+- `style_main_window` / `style_reminder_window` — 通过 DWM 设置窗口圆角（浮层直角、主窗圆角）并去掉系统描边；两者共用同一个 `set_window_chrome`，只差圆角常量
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
 - `set_autostart` — 注册表 Run 键的增删
-- `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定
+- `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定；句柄刻意不关闭，进程存活期间持续持有互斥体
 - `show_main_window` — 按需 `SW_SHOWMAXIMIZED` / `SW_SHOWNOACTIVATE` 并置前
 
 ### 一次提醒的完整数据流
@@ -186,10 +187,11 @@ cargo build --release
 src/
 ├── main.rs              入口、单实例、事件汇聚循环
 ├── config.rs            设置模型与 settings.txt 读写、间隔常量表
+├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
 ├── data.rs              SQLite 连接池、DrinkCache 记录缓存、记录读写
 ├── scheduler.rs         调度线程与 AppCmd 协议
 ├── tray.rs              托盘图标与右键菜单
-├── ui.rs                时间工具、热力图配色、标题栏按钮
+├── ui.rs                时间工具、热力图配色、标题栏与窗口按钮
 ├── main_window.rs       主窗口：日历热力图 + 时间轴
 ├── reminder_window.rs   全屏提醒浮层
 ├── settings_window.rs   设置窗口

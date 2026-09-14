@@ -85,14 +85,10 @@ pub fn ensure_single_instance() -> bool {
     use windows::core::w;
     unsafe {
         match CreateMutexW(None, true, w!("Local\\WaterRemainder.SingleInstance")) {
-            Ok(handle) => {
-                if GetLastError() == ERROR_ALREADY_EXISTS {
-                    false
-                } else {
-                    let _mutex_handle = handle;
-                    true
-                }
-            }
+            // 句柄故意不关闭：进程存活期间持有互斥体，退出时由系统回收。
+            // `HANDLE` 自身没有 Drop（RAII 由 `Owned<HANDLE>` 承担），
+            // 因此这里直接丢弃绑定不会提前释放互斥体。
+            Ok(_owner) => GetLastError() != ERROR_ALREADY_EXISTS,
             Err(_) => true,
         }
     }
@@ -103,14 +99,33 @@ pub fn ensure_single_instance() -> bool {
     true
 }
 
+/// 从 GPUI 窗口取出原生 HWND。句柄提取与 `unsafe` 只在这一层出现。
 #[cfg(windows)]
-pub fn strip_win11_chrome(hwnd: windows::Win32::Foundation::HWND) {
+fn hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundation::HWND> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    // `Window` 自带一个同名的固有方法（返回 `AnyWindowHandle`），必须用完全限定
+    // 语法才能拿到 raw-window-handle 的实现。
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(value) => Some(windows::Win32::Foundation::HWND(
+            value.hwnd.get() as *mut _,
+        )),
+        _ => None,
+    }
+}
+
+/// 设置 DWM 圆角偏好并去掉描边。主窗与浮层只差圆角常量，共用这一处调用。
+#[cfg(windows)]
+fn set_window_chrome(
+    hwnd: windows::Win32::Foundation::HWND,
+    corner: windows::Win32::Graphics::Dwm::DWM_WINDOW_CORNER_PREFERENCE,
+) {
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-        DwmSetWindowAttribute,
+        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
     };
+
     unsafe {
-        let corner = DWMWCP_DONOTROUND;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -127,37 +142,42 @@ pub fn strip_win11_chrome(hwnd: windows::Win32::Foundation::HWND) {
     }
 }
 
+/// 主窗口：启用 DWM 圆角。
 #[cfg(windows)]
-pub fn style_main_window(hwnd: windows::Win32::Foundation::HWND) {
-    use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
-        DwmSetWindowAttribute,
-    };
+pub fn style_main_window(window: &gpui::Window) {
+    use windows::Win32::Graphics::Dwm::DWMWCP_ROUND;
 
-    unsafe {
-        let corner = DWMWCP_ROUND;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner as *const _ as *const _,
-            std::mem::size_of_val(&corner) as u32,
-        );
-        let border = DWMWA_COLOR_NONE;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_BORDER_COLOR,
-            &border as *const _ as *const _,
-            std::mem::size_of_val(&border) as u32,
-        );
+    if let Some(hwnd) = hwnd(window) {
+        set_window_chrome(hwnd, DWMWCP_ROUND);
     }
 }
 
+#[cfg(not(windows))]
+pub fn style_main_window(_: &gpui::Window) {}
+
+/// 提醒浮层：禁用 DWM 圆角（铺满整屏时圆角会露出下层桌面）。
 #[cfg(windows)]
-pub fn show_main_window(hwnd: windows::Win32::Foundation::HWND) {
+pub fn style_reminder_window(window: &gpui::Window) {
+    use windows::Win32::Graphics::Dwm::DWMWCP_DONOTROUND;
+
+    if let Some(hwnd) = hwnd(window) {
+        set_window_chrome(hwnd, DWMWCP_DONOTROUND);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn style_reminder_window(_: &gpui::Window) {}
+
+/// 把主窗从托盘唤回：沿用最大化状态置前，但不抢焦点。
+#[cfg(windows)]
+pub fn show_main_window(window: &gpui::Window) {
     use windows::Win32::UI::WindowsAndMessaging::{
         IsZoomed, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow,
     };
 
+    let Some(hwnd) = hwnd(window) else {
+        return;
+    };
     unsafe {
         let show_command = if IsZoomed(hwnd).as_bool() {
             SW_SHOWMAXIMIZED
@@ -168,3 +188,6 @@ pub fn show_main_window(hwnd: windows::Win32::Foundation::HWND) {
         let _ = SetForegroundWindow(hwnd);
     }
 }
+
+#[cfg(not(windows))]
+pub fn show_main_window(_: &gpui::Window) {}

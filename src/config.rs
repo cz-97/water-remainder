@@ -1,16 +1,25 @@
-use std::{env, fs, path::PathBuf};
+use crate::paths::app_dir;
+use std::{fs, path::PathBuf};
+
 const MIN_INTERVAL: u64 = 60;
 pub const DEFAULT_INTERVAL: u64 = 45 * MIN_INTERVAL;
-macro_rules! intervals {
-    ($($m:expr),*) => {
-        &[
-            $(
-                ($m * MIN_INTERVAL, concat!($m, " 分钟")),
-            )*
-        ]
-    };
-}
-pub const INTERVALS: &[(u64, &str)] = intervals![15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75];
+
+/// 可选提醒间隔（秒），设置窗与调度器共用这一份来源。
+pub const INTERVALS: &[u64] = &[
+    15 * MIN_INTERVAL,
+    20 * MIN_INTERVAL,
+    25 * MIN_INTERVAL,
+    30 * MIN_INTERVAL,
+    35 * MIN_INTERVAL,
+    40 * MIN_INTERVAL,
+    45 * MIN_INTERVAL,
+    50 * MIN_INTERVAL,
+    55 * MIN_INTERVAL,
+    60 * MIN_INTERVAL,
+    65 * MIN_INTERVAL,
+    70 * MIN_INTERVAL,
+    75 * MIN_INTERVAL,
+];
 
 #[derive(Clone)]
 pub struct Settings {
@@ -31,11 +40,7 @@ pub struct WindowState {
 }
 
 fn settings_file() -> PathBuf {
-    let base = env::var_os("APPDATA")
-        .or_else(|| env::var_os("LOCALAPPDATA"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("water-remainder").join("settings.txt")
+    app_dir().join("settings.txt")
 }
 
 pub fn load_store() -> Store {

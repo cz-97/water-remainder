@@ -4,8 +4,8 @@ use crate::{
     scheduler::SchedulerCmd,
     settings_window::{close_settings_window, open_settings_window},
     ui::{
-        calendar_color, format_clock, format_date, local_date, now, palette, relative_to_now,
-        titlebar, window_button,
+        ACTION_ICON_SIZE, calendar_color, format_clock, format_date, local_date, now, palette,
+        relative_to_now, titlebar, titlebar_button, window_button,
     },
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
@@ -134,17 +134,7 @@ impl MainWindow {
             .flex()
             .items_center()
             .child(
-                div()
-                    .id("settings-button")
-                    .font_family("Segoe Fluent Icons")
-                    .w(px(46.))
-                    .h(px(38.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(14.))
-                    .text_color(rgb(palette::TITLEBAR_FG))
-                    .hover(|s| s.bg(rgb(palette::TITLEBAR_HOVER)))
+                titlebar_button("settings-button", palette::TITLEBAR_HOVER, ACTION_ICON_SIZE)
                     .cursor_pointer()
                     .child("\u{e713}")
                     .on_mouse_down(

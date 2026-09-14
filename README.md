@@ -132,7 +132,7 @@
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
 - `settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。两处修改都走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里，窗口侧只描述「改什么」，不出现 `lock` + `save_store` 的成对代码。间隔变更随后向调度器发送 `ChangeInterval`。
 
-`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的两个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）与 `window_button()`（`Segoe Fluent Icons` 图标 + `WindowControlArea` 的最小化/最大化/关闭）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
 `palette` 是全部界面颜色的唯一来源。因为 `gpui::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
 
@@ -196,7 +196,7 @@ src/
 ├── data.rs              SQLite 连接池、DrinkCache 记录缓存、记录读写
 ├── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
 ├── tray.rs              托盘图标与右键菜单
-├── ui.rs                时间工具、palette 配色、标题栏与窗口按钮
+├── ui.rs                时间工具、palette 配色、标题栏与共用按钮样式
 ├── main_window.rs       主窗口：日历热力图 + 时间轴
 ├── reminder_window.rs   全屏提醒浮层
 ├── settings_window.rs   设置窗口

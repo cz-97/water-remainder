@@ -51,10 +51,10 @@
    ┌────▼────┐   ┌─────▼─────┐  ┌─────▼─────┐  ┌─────▼──────┐
    │ tray.rs │   │scheduler.rs│ │ config.rs │  │  data.rs   │
    │ 托盘图标 │   │ 定时调度线程│ │ 设置持久化 │  │ SQLite 存储 │
-   │ 菜单项   │   │ AppCmd 协议│ │ settings  │  │ 记录 + 缓存 │
+   │ 菜单项   │   │ 命令/事件  │ │ settings  │  │ 记录 + 缓存 │
    └────┬────┘   └─────┬─────┘  └───────────┘  └─────┬──────┘
         │              │                              │
-        │   TrayIconEvent / MenuEvent / AppCmd          │
+        │   TrayIconEvent / MenuEvent / SchedulerEvent   │
         └──────────────┴──────────────┬───────────────┘
                                       ▼
                        ┌──────────────────────────────┐
@@ -81,7 +81,7 @@
 
 - `TrayIconEvent`（托盘点击）— 来自 `tray-icon` 的全局回调
 - `MenuEvent`（菜单项）— 来自 `muda` 的全局回调
-- `AppCmd`（调度器信号）— 由独立的 OS 线程 `recv` 后转发
+- `SchedulerEvent`（调度器信号）— 由独立的 OS 线程 `recv` 后转发
 
 这样做的好处是：UI 的所有变更都串行发生在 GPUI 主线程的同一处 `match`，无需在回调里做跨线程的界面操作。
 
@@ -89,8 +89,10 @@
 
 一个专用的 OS 线程，持有 `std::sync::mpsc` 双向通道：
 
-- 输入 `AppCmd`：`Reschedule(Drink | Wake | ChangeInterval)`、`Trigger`、`Stop`
-- 输出 `AppCmd::ShowOverlay(remaining_secs)`：交给主线程弹窗
+- 输入 `SchedulerCmd`：`Reschedule(Drink | Wake | ChangeInterval)`、`Trigger`、`Stop`
+- 输出 `SchedulerEvent::Remind { remaining }`：交给主线程弹窗
+
+两个方向各自一个枚举。这样 UI 侧的 `match` 只面对 `Remind` 一个变体，不需要用 catch-all 分支去吞掉「只发给调度器的命令」——将来调度器新增事件时，编译器的穷尽性检查会直接报出未处理的变体，而不是被静默忽略。
 
 核心是一个 **1 秒粒度的轮询循环**（`recv_timeout` 兼作 sleep），用 `deadline: SystemTime` 表示下次提醒时刻。超时即触发提醒并把 deadline 顺延；`Trigger` 则立即触发但不重置 deadline（因此浮层上能显示「将于 X 分钟后再次提醒」）。
 
@@ -122,14 +124,17 @@
 
 - `main_window.rs` — 记录总览。日历按「今天向前倒推」逐行生成（每行 7 天，行内首次遇到 `day == 1` 时标注月份），配色由 `ui::calendar_color()` 按当日次数映射到蓝色梯度，形成 GitHub 贡献图式热力图；右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
   - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` 三个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `cache.count(day)`（返回 `usize`）上色；选中日期的明细列表则按 `selected_date` 现取 `cache.times(day)`（借用切片，不拷贝），点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
+  - `render()` 只做三件事：组装一次性的 `RenderInput`（`today` / `selected` / 记录快照）、调用三个子视图、拼外壳。时刻与记录因此是**显式传参**，`calendar()` / `timeline()` / `title_actions()` 不会各自去读全局状态。三个子视图的返回类型写成具体的 `Div` 而非 `impl IntoElement`，否则返回值会隐式借用 `&mut Context`，同一个 `render` 里就没法把 `cx` 依次交给多个子视图。
 - `reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
   - **两处倒计时按秒跳动**。实体创建时 `cx.spawn` 起一个 1 秒周期的后台定时任务，每轮醒来 `cx.notify()` 触发重绘（`notify` → `invalidate_view` 置窗口 dirty 并唤醒平台 waker → 下一帧重跑 `render`）。窗口关闭后弱引用升级失败，任务自行退出，不会泄漏。
   - 文案形如 `您在 1 天 2 小时 15 分 30 秒前喝过水（昨天 15:04:32），将于 12 分 3 秒后再次提醒您（15:37:11）`。时间一律写到秒，并用「从最大非零单位一路展开到秒」的写法，避免出现「1 小时 59 秒」这种有歧义的省略。
   - 括号内是具体时刻 `HH:MM:SS`；日期用相对词表示——当天省略、`昨天`、`前天`、`N 天前`。下次提醒的时刻始终不写日期。
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
-- `settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。修改间隔会同时落盘、改注册表、并向调度器发送 `ChangeInterval`。
+- `settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。两处修改都走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里，窗口侧只描述「改什么」，不出现 `lock` + `save_store` 的成对代码。间隔变更随后向调度器发送 `ChangeInterval`。
 
-`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、热力图调色板 `calendar_color`、以及自绘标题栏的两个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）与 `window_button()`（`Segoe Fluent Icons` 图标 + `WindowControlArea` 的最小化/最大化/关闭）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的两个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）与 `window_button()`（`Segoe Fluent Icons` 图标 + `WindowControlArea` 的最小化/最大化/关闭）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+
+`palette` 是全部界面颜色的唯一来源。因为 `gpui::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
 
 **5. 平台适配层（`platform.rs`）**
 
@@ -146,12 +151,12 @@
 
 ```
 调度线程 deadline 到期
-      └─> at.send(AppCmd::ShowOverlay(secs))
+      └─> event_tx.send(SchedulerEvent::Remind { remaining })
             └─> 转发线程 → AppEvent::Alarm → GPUI 主线程 match
                   └─> reminder_window::open_reminder_window()
                         用户点「喝了」
                           ├─> data::save_time()            写 SQLite + 增量入当天桶
-                          ├─> scheduler_tx.send(Reschedule(Drink))  deadline = now + interval
+                          ├─> scheduler_tx.send(SchedulerCmd::Reschedule(Drink))  deadline = now + interval
                           └─> window.remove_window()       关闭浮层
 ```
 
@@ -189,9 +194,9 @@ src/
 ├── config.rs            设置模型与 settings.txt 读写、间隔常量表
 ├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
 ├── data.rs              SQLite 连接池、DrinkCache 记录缓存、记录读写
-├── scheduler.rs         调度线程与 AppCmd 协议
+├── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
 ├── tray.rs              托盘图标与右键菜单
-├── ui.rs                时间工具、热力图配色、标题栏与窗口按钮
+├── ui.rs                时间工具、palette 配色、标题栏与窗口按钮
 ├── main_window.rs       主窗口：日历热力图 + 时间轴
 ├── reminder_window.rs   全屏提醒浮层
 ├── settings_window.rs   设置窗口

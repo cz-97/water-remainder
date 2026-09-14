@@ -1,5 +1,9 @@
 use crate::paths::app_dir;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 const MIN_INTERVAL: u64 = 60;
 pub const DEFAULT_INTERVAL: u64 = 45 * MIN_INTERVAL;
@@ -26,6 +30,16 @@ pub struct Settings {
     pub interval_secs: u64,
     pub autostart: bool,
 }
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            interval_secs: DEFAULT_INTERVAL,
+            autostart: false,
+        }
+    }
+}
+
 pub struct Store {
     pub settings: Settings,
     pub window_state: Option<WindowState>,
@@ -104,6 +118,18 @@ pub fn save_store(s: &Store) {
         ));
     }
     let _ = fs::write(p, out);
+}
+
+/// 改设置并落盘的唯一入口：加锁、修改、持久化都在这里完成，
+/// 调用方只描述「改什么」。返回闭包的返回值；锁中毒时返回 `None` 且不落盘。
+pub fn update_settings<R>(
+    store: &Arc<Mutex<Store>>,
+    edit: impl FnOnce(&mut Settings) -> R,
+) -> Option<R> {
+    let mut guard = store.lock().ok()?;
+    let result = edit(&mut guard.settings);
+    save_store(&guard);
+    Some(result)
 }
 
 fn default_window_state() -> WindowState {

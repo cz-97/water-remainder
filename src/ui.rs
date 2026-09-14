@@ -2,6 +2,45 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use gpui::{WindowControlArea, div, prelude::*, px, rgb};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 界面配色唯一来源。`gpui::rgb()` 不是 `const fn`，无法定义 `const Rgba`，
+/// 因此这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`。
+pub mod palette {
+    // 窗口外壳
+    pub const WINDOW_BG: u32 = 0x1f1f1f;
+    pub const TITLEBAR_BG: u32 = 0x1d1d1d;
+    pub const TITLEBAR_FG: u32 = 0xe0f2fe;
+    pub const TITLEBAR_HOVER: u32 = 0x254c77;
+    pub const ROW_HOVER: u32 = 0x292929;
+    pub const CLOSE_HOVER: u32 = 0xdc2626;
+    pub const WHITE: u32 = 0xffffff;
+
+    // 文字：由强到弱
+    pub const TEXT: u32 = 0xe5e7eb;
+    pub const TEXT_MUTED: u32 = 0x94a3b8;
+    pub const TEXT_SOFT: u32 = 0xcbd5e1;
+    pub const TEXT_BUTTON: u32 = 0xe2e8f0;
+    pub const TEXT_DISABLED: u32 = 0x64748b;
+
+    // 交互
+    pub const ACCENT: u32 = 0x60a5fa;
+    pub const ACCENT_HOVER: u32 = 0x3b82f6;
+    pub const BORDER: u32 = 0x64748b;
+    pub const SWITCH_OFF: u32 = 0x475569;
+    pub const STEP_BG: u32 = 0x334155;
+    pub const STEP_BG_HOVER: u32 = 0x475569;
+    pub const STEP_BG_DISABLED: u32 = 0x252b33;
+
+    /// 日历热力图色阶，索引即等级（0 = 无记录），由浅到深。
+    pub const CALENDAR: [u32; 9] = [
+        0x404040, 0xdbeafe, 0xbfdbfe, 0x93c5fd, 0x60a5fa, 0x3b82f6, 0x2563eb, 0x1d4ed8, 0x1e3a8a,
+    ];
+
+    /// 提醒浮层的半透明遮罩（此处是 hsla，不是 rgb）。
+    pub fn overlay_bg() -> gpui::Hsla {
+        gpui::hsla(0., 0., 0., 0.85)
+    }
+}
+
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -68,18 +107,10 @@ pub fn format_date(date: NaiveDate) -> String {
     format!("{}年{}月{}日", date.year(), date.month(), date.day())
 }
 
+/// 次数 → 热力图等级：每 3 次升一级并封顶，0 次单独一档。
 pub fn calendar_color(count: usize) -> gpui::Rgba {
-    match count {
-        0 => rgb(0x404040),
-        1..=3 => rgb(0xdbeafe),
-        4..=6 => rgb(0xbfdbfe),
-        7..=9 => rgb(0x93c5fd),
-        10..=12 => rgb(0x60a5fa),
-        13..=15 => rgb(0x3b82f6),
-        16..=18 => rgb(0x2563eb),
-        19..=21 => rgb(0x1d4ed8),
-        _ => rgb(0x1e3a8a),
-    }
+    let level = count.div_ceil(3).min(palette::CALENDAR.len() - 1);
+    rgb(palette::CALENDAR[level])
 }
 
 /// 两个窗口共用的自绘标题栏：左侧可拖拽的标题，右侧由调用方传入按钮组。
@@ -88,7 +119,7 @@ pub fn titlebar(title: &'static str, actions: impl IntoElement) -> impl IntoElem
         .h(px(38.))
         .flex()
         .items_center()
-        .bg(rgb(0x1d1d1d))
+        .bg(rgb(palette::TITLEBAR_BG))
         .child(
             div()
                 .flex_1()
@@ -96,7 +127,7 @@ pub fn titlebar(title: &'static str, actions: impl IntoElement) -> impl IntoElem
                 .flex()
                 .items_center()
                 .px_4()
-                .text_color(rgb(0xe0f2fe))
+                .text_color(rgb(palette::TITLEBAR_FG))
                 .font_weight(gpui::FontWeight::BOLD)
                 .window_control_area(WindowControlArea::Drag)
                 .child(title),
@@ -106,9 +137,9 @@ pub fn titlebar(title: &'static str, actions: impl IntoElement) -> impl IntoElem
 
 pub fn window_button(label: &'static str, area: WindowControlArea) -> impl IntoElement {
     let hover = if area == WindowControlArea::Close {
-        rgb(0xdc2626)
+        rgb(palette::CLOSE_HOVER)
     } else {
-        rgb(0x254c77)
+        rgb(palette::TITLEBAR_HOVER)
     };
     let id = match area {
         WindowControlArea::Min => "window-minimize",
@@ -125,7 +156,7 @@ pub fn window_button(label: &'static str, area: WindowControlArea) -> impl IntoE
         .items_center()
         .justify_center()
         .text_size(px(12.))
-        .text_color(rgb(0xe0f2fe))
+        .text_color(rgb(palette::TITLEBAR_FG))
         .occlude()
         .hover(move |s| s.bg(hover))
         .window_control_area(area)

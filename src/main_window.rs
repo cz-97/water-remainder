@@ -1,36 +1,43 @@
 use crate::{
     config::{Store, WindowState, save_store},
-    data::snapshot,
-    scheduler::AppCmd,
+    data::{DrinkCache, snapshot},
+    scheduler::SchedulerCmd,
     settings_window::{close_settings_window, open_settings_window},
     ui::{
-        calendar_color, format_clock, format_date, local_date, now, relative_to_now, titlebar,
-        window_button,
+        calendar_color, format_clock, format_date, local_date, now, palette, relative_to_now,
+        titlebar, window_button,
     },
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
 use gpui::{
-    App, Bounds, Context, MouseButton, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, Div, MouseButton, Window, WindowBounds, WindowControlArea, WindowKind,
+    WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use std::sync::{Arc, Mutex, mpsc};
 
+/// 一次渲染的全部外部输入。显式传递，「当前时刻」与「记录快照」因此
+/// 只在这一处取得，子视图不再各自去读全局状态。
+struct RenderInput {
+    today: NaiveDate,
+    selected: NaiveDate,
+    cache: Arc<DrinkCache>,
+}
+
 pub struct MainWindow {
     store: Arc<Mutex<Store>>,
-    scheduler: mpsc::Sender<AppCmd>,
+    scheduler: mpsc::Sender<SchedulerCmd>,
     selected_date: NaiveDate,
 }
 
-impl Render for MainWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let today = local_date(now());
-        let selected = self.selected_date;
-        // 全量记录走进程内缓存：首次访问读一次数据库，之后只读内存。
-        // 日历只需要每天的条数，明细留到渲染右侧时间轴时按 selected 现取。
-        let cache = snapshot();
-        let earliest = cache.earliest_day().unwrap_or(today);
+// 三个子视图都返回具体的 `Div` 而非 `impl IntoElement`：后者会让返回值
+// 隐式借用 `&mut Context`，同一个 `render` 里就无法再把它交给别的子视图。
+impl MainWindow {
+    /// 日历热力图：只用到每天的条数，不碰明细。
+    fn calendar(&self, input: &RenderInput, cx: &mut Context<Self>) -> Div {
+        let earliest = input.cache.earliest_day().unwrap_or(input.today);
         let earliest_month_start = earliest.with_day(1).unwrap_or(earliest);
-        let day_count = today
+        let day_count = input
+            .today
             .signed_duration_since(earliest_month_start)
             .num_days()
             .max(0) as usize
@@ -40,13 +47,13 @@ impl Render for MainWindow {
         let mut calendar = div().flex().flex_col().gap_1().w(px(250.));
         for row in 0..row_count {
             let month = (0..7).find_map(|offset| {
-                let day = today - DateDuration::days((row * 7 + offset) as i64);
+                let day = input.today - DateDuration::days((row * 7 + offset) as i64);
                 (day.day() == 1).then_some(day.month())
             });
             let mut week = div().flex().gap_1();
             for offset in 0..7 {
-                let day = today - DateDuration::days((row * 7 + offset) as i64);
-                let count = cache.count(day);
+                let day = input.today - DateDuration::days((row * 7 + offset) as i64);
+                let count = input.cache.count(day);
                 let mut cell = div()
                     .w(px(24.))
                     .h(px(24.))
@@ -54,8 +61,8 @@ impl Render for MainWindow {
                     .cursor_pointer()
                     .child("")
                     .bg(calendar_color(count));
-                if day == selected {
-                    cell = cell.border_2().border_color(rgb(0xffffff));
+                if day == input.selected {
+                    cell = cell.border_2().border_color(rgb(palette::WHITE));
                 }
                 week = week.child(cell.on_mouse_down(
                     MouseButton::Left,
@@ -70,7 +77,7 @@ impl Render for MainWindow {
                 .h(px(24.))
                 .flex()
                 .items_center()
-                .text_color(rgb(0x94a3b8))
+                .text_color(rgb(palette::TEXT_MUTED))
                 .child(
                     month
                         .map(|month| format!("{}月", month))
@@ -78,16 +85,22 @@ impl Render for MainWindow {
                 );
             calendar = calendar.child(div().flex().items_center().child(month_label).child(week));
         }
-        let calendar = calendar.mt_4();
+        calendar.mt_4()
+    }
 
-        // 右侧时间轴：只在这里按选中的那一天取明细（借用切片，不拷贝）。
-        let selected_timestamps = cache.times(selected);
+    /// 右侧时间轴：只在这按选中日期取明细（借用切片，不拷贝）。
+    fn timeline(&self, input: &RenderInput) -> Div {
+        let timestamps = input.cache.times(input.selected);
         let mut records = div().flex().flex_col().gap_2().mt_3();
-        if selected_timestamps.is_empty() {
-            records = records.child(div().text_color(rgb(0x94a3b8)).child("这天没有喝水记录"));
+        if timestamps.is_empty() {
+            records = records.child(
+                div()
+                    .text_color(rgb(palette::TEXT_MUTED))
+                    .child("这天没有喝水记录"),
+            );
         } else {
-            for timestamp in selected_timestamps.iter().rev() {
-                let text = if selected == today {
+            for timestamp in timestamps.iter().rev() {
+                let text = if input.selected == input.today {
                     format!(
                         "{}  ·  {}",
                         format_clock(*timestamp),
@@ -101,12 +114,23 @@ impl Render for MainWindow {
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(rgb(0x60a5fa)))
+                        .child(
+                            div()
+                                .w(px(8.))
+                                .h(px(8.))
+                                .rounded_full()
+                                .bg(rgb(palette::ACCENT)),
+                        )
                         .child(text),
                 );
             }
         }
-        let title_actions = div()
+        records
+    }
+
+    /// 标题栏右侧：设置入口 + 最小化 / 最大化 / 关闭。
+    fn title_actions(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        div()
             .flex()
             .items_center()
             .child(
@@ -119,8 +143,8 @@ impl Render for MainWindow {
                     .items_center()
                     .justify_center()
                     .text_size(px(14.))
-                    .text_color(rgb(0xe0f2fe))
-                    .hover(|s| s.bg(rgb(0x254c77)))
+                    .text_color(rgb(palette::TITLEBAR_FG))
+                    .hover(|s| s.bg(rgb(palette::TITLEBAR_HOVER)))
                     .cursor_pointer()
                     .child("\u{e713}")
                     .on_mouse_down(
@@ -139,15 +163,28 @@ impl Render for MainWindow {
                 },
                 WindowControlArea::Max,
             ))
-            .child(window_button("\u{e8bb}", WindowControlArea::Close));
-        let title_bar = titlebar("喝水提醒", title_actions);
+            .child(window_button("\u{e8bb}", WindowControlArea::Close))
+    }
+}
+
+impl Render for MainWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 全量记录走进程内缓存：首次访问读一次数据库，之后只读内存。
+        let input = RenderInput {
+            today: local_date(now()),
+            selected: self.selected_date,
+            cache: snapshot(),
+        };
+        let calendar = self.calendar(&input, cx);
+        let timeline = self.timeline(&input);
+        let title_bar = titlebar("喝水提醒", self.title_actions(window, cx));
 
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x1f1f1f))
-            .text_color(rgb(0xe5e7eb))
+            .bg(rgb(palette::WINDOW_BG))
+            .text_color(rgb(palette::TEXT))
             .child(title_bar)
             .child(
                 div()
@@ -181,16 +218,16 @@ impl Render for MainWindow {
                                 div()
                                     .text_xl()
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .child(format_date(selected)),
+                                    .child(format_date(input.selected)),
                             )
-                            .child(div().mt_1().text_color(rgb(0x94a3b8)).child(
-                                if selected == today {
+                            .child(div().mt_1().text_color(rgb(palette::TEXT_MUTED)).child(
+                                if input.selected == input.today {
                                     "今天"
                                 } else {
                                     "历史记录"
                                 },
                             ))
-                            .child(records),
+                            .child(timeline),
                     ),
             )
     }
@@ -212,7 +249,11 @@ fn capture_window_state(window: &Window) -> WindowState {
     }
 }
 
-pub fn open_main_window(cx: &mut App, store: Arc<Mutex<Store>>, scheduler: mpsc::Sender<AppCmd>) {
+pub fn open_main_window(
+    cx: &mut App,
+    store: Arc<Mutex<Store>>,
+    scheduler: mpsc::Sender<SchedulerCmd>,
+) {
     if let Some(handle) = cx.windows().iter().find_map(|w| w.downcast::<MainWindow>()) {
         let _ = handle.update(cx, |_, window, _| {
             crate::platform::show_main_window(window);
@@ -234,7 +275,11 @@ pub fn save_main_window_state(cx: &mut App) {
     }
 }
 
-fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, scheduler: mpsc::Sender<AppCmd>) {
+fn create_main_window(
+    cx: &mut App,
+    store: Arc<Mutex<Store>>,
+    scheduler: mpsc::Sender<SchedulerCmd>,
+) {
     let today = Local::now().date_naive();
     let saved_state = store.lock().ok().and_then(|s| s.window_state);
     let window_bounds = saved_state
@@ -261,9 +306,7 @@ fn create_main_window(cx: &mut App, store: Arc<Mutex<Store>>, scheduler: mpsc::S
                     ..Default::default()
                 }),
                 kind: WindowKind::Normal,
-                is_resizable: true,
                 window_min_size: Some(size(px(500.), px(800.))),
-                window_background: WindowBackgroundAppearance::Opaque,
                 ..Default::default()
             },
             move |window, cx| {

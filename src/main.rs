@@ -18,7 +18,7 @@ use gpui::App;
 use gpui_platform::application;
 use main_window::open_main_window;
 use reminder_window::open_reminder_window;
-use scheduler::{AppCmd, RescheduleType, start_scheduler};
+use scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
 use std::sync::{Arc, Mutex, mpsc};
 use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
@@ -27,7 +27,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 enum AppEvent {
     Tray(TrayIconEvent),
     Menu(MenuEvent),
-    Alarm(AppCmd),
+    Alarm(SchedulerEvent),
 }
 
 fn send_event(tx: &UnboundedSender<AppEvent>, event: AppEvent) {
@@ -51,7 +51,7 @@ fn main() {
             // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。
             let wake_tx = scheduler_tx.clone();
             let _wake_subscription = cx.on_system_wake(move |_| {
-                let _ = wake_tx.send(AppCmd::Reschedule(RescheduleType::Wake));
+                let _ = wake_tx.send(SchedulerCmd::Reschedule(RescheduleType::Wake));
             });
             let show_id = show.id().clone();
             let quit_id = quit.id().clone();
@@ -92,9 +92,9 @@ fn main() {
                         }
                         AppEvent::Menu(event) => {
                             if event.id == show_id {
-                                let _ = scheduler_tx.send(AppCmd::Trigger);
+                                let _ = scheduler_tx.send(SchedulerCmd::Trigger);
                             } else if event.id == quit_id {
-                                let _ = scheduler_tx.send(AppCmd::Stop);
+                                let _ = scheduler_tx.send(SchedulerCmd::Stop);
                                 cx.update(|cx| {
                                     main_window::save_main_window_state(cx);
                                     cx.quit();
@@ -102,10 +102,9 @@ fn main() {
                                 return;
                             }
                         }
-                        AppEvent::Alarm(AppCmd::ShowOverlay(remaining)) => {
+                        AppEvent::Alarm(SchedulerEvent::Remind { remaining }) => {
                             show_reminder(cx, scheduler_tx.clone(), remaining);
                         }
-                        AppEvent::Alarm(_) => {}
                     }
                 }
             })
@@ -113,6 +112,6 @@ fn main() {
         });
 }
 
-fn show_reminder(cx: &mut gpui::AsyncApp, scheduler: mpsc::Sender<AppCmd>, remaining: u64) {
+fn show_reminder(cx: &mut gpui::AsyncApp, scheduler: mpsc::Sender<SchedulerCmd>, remaining: u64) {
     let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
 }

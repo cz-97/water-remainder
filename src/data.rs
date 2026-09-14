@@ -35,7 +35,10 @@ impl DrinkCache {
 
         let mut by_day: BTreeMap<NaiveDate, Vec<u64>> = BTreeMap::new();
         for timestamp in all {
-            by_day.entry(local_date(timestamp)).or_default().push(timestamp);
+            by_day
+                .entry(local_date(timestamp))
+                .or_default()
+                .push(timestamp);
         }
         Self { by_day }
     }
@@ -160,7 +163,9 @@ pub fn snapshot() -> Arc<DrinkCache> {
     // 首帧之前先在写锁内完成加载，保证全进程只产生这一次 SELECT。
     let mut slot = records_slot().write().unwrap();
     if slot.is_none() {
-        *slot = Some(Arc::new(DrinkCache::from_timestamps(query_all_timestamps())));
+        *slot = Some(Arc::new(
+            DrinkCache::from_timestamps(query_all_timestamps()),
+        ));
     }
     slot.as_ref().unwrap().clone()
 }

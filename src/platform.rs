@@ -108,9 +108,9 @@ fn hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundation::HWND> {
     // 语法才能拿到 raw-window-handle 的实现。
     let handle = HasWindowHandle::window_handle(window).ok()?;
     match handle.as_raw() {
-        RawWindowHandle::Win32(value) => Some(windows::Win32::Foundation::HWND(
-            value.hwnd.get() as *mut _,
-        )),
+        RawWindowHandle::Win32(value) => {
+            Some(windows::Win32::Foundation::HWND(value.hwnd.get() as *mut _))
+        }
         _ => None,
     }
 }

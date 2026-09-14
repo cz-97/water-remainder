@@ -1,15 +1,15 @@
 use crate::{
     data::{last_time, save_time},
-    scheduler::{AppCmd, RescheduleType},
-    ui::{format_clock_secs, format_day_label, format_span, local_date, now},
+    scheduler::{RescheduleType, SchedulerCmd},
+    ui::{format_clock_secs, format_day_label, format_span, local_date, now, palette},
 };
 use gpui::{
     App, Context, Image, ImageFormat, MouseButton, Rems, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, div, hsla, img, prelude::*, rgb,
+    WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
 };
 use std::{sync::mpsc, time::Duration};
 pub struct ReminderWindow {
-    scheduler: mpsc::Sender<AppCmd>,
+    scheduler: mpsc::Sender<SchedulerCmd>,
     /// 最近一次喝水的时间戳（Unix 秒）。
     last_drink: Option<u64>,
     /// 下一次提醒的时刻（Unix 秒）。
@@ -49,17 +49,17 @@ impl Render for ReminderWindow {
             .px_10()
             .py_4()
             .rounded_md()
-            .bg(rgb(0x60a5fa))
-            .hover(|s| s.bg(rgb(0x3b82f6)))
+            .bg(rgb(palette::ACCENT))
+            .hover(|s| s.bg(rgb(palette::ACCENT_HOVER)))
             .cursor_pointer()
-            .text_color(rgb(0xffffff))
+            .text_color(rgb(palette::WHITE))
             .text_3xl()
             .child("喝了")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_, _, w, _| {
                     save_time();
-                    let _ = tx.send(AppCmd::Reschedule(RescheduleType::Drink));
+                    let _ = tx.send(SchedulerCmd::Reschedule(RescheduleType::Drink));
                     w.remove_window();
                 }),
             );
@@ -68,9 +68,9 @@ impl Render for ReminderWindow {
             .py_4()
             .rounded_md()
             .border_1()
-            .border_color(rgb(0x64748b))
+            .border_color(rgb(palette::BORDER))
             .cursor_pointer()
-            .text_color(rgb(0xe2e8f0))
+            .text_color(rgb(palette::TEXT_BUTTON))
             .text_3xl()
             .child("跳过")
             .on_mouse_down(
@@ -84,10 +84,10 @@ impl Render for ReminderWindow {
             .justify_start()
             .items_center()
             .gap_2()
-            .bg(hsla(0., 0., 0., 0.85))
+            .bg(palette::overlay_bg())
             .child(
                 div()
-                    .text_color(rgb(0xffffff))
+                    .text_color(rgb(palette::WHITE))
                     .text_size(Rems(2.5))
                     .font_weight(gpui::FontWeight::BOLD)
                     .child("该喝水了")
@@ -96,7 +96,7 @@ impl Render for ReminderWindow {
             .child(
                 div()
                     .mt_2()
-                    .text_color(rgb(0xcbd5e1))
+                    .text_color(rgb(palette::TEXT_SOFT))
                     .text_size(Rems(1.05))
                     .child(status),
             )
@@ -110,7 +110,7 @@ impl Render for ReminderWindow {
             .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: u64) {
+pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remaining: u64) {
     if cx
         .windows()
         .iter()
@@ -161,6 +161,8 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<AppCmd>, remaining: u
         )
         .ok();
     if let Some(handle) = handle {
-        let _ = handle.update(cx, |_, window, _| crate::platform::style_reminder_window(window));
+        let _ = handle.update(cx, |_, window, _| {
+            crate::platform::style_reminder_window(window)
+        });
     }
 }

@@ -312,7 +312,10 @@ fn create_main_window(
                         store.window_state = Some(capture_window_state(window));
                         save_store(&store);
                     }
-                    true
+                    // 关闭按钮只是把窗口收起来，进程继续常驻托盘（退出走托盘菜单）。
+                    // 返回 false 让 gpui 吞掉 WM_CLOSE，不再交给 DefWindowProc 销毁窗口。
+                    crate::platform::hide_main_window(window);
+                    false
                 });
                 view
             },

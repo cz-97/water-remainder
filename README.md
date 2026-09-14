@@ -22,6 +22,7 @@
 | 右键托盘菜单「立即提醒」 | 立刻弹出一次提醒浮层 |
 | 右键托盘菜单「退出」 | 保存窗口状态并结束进程 |
 | 主窗口标题栏齿轮图标 | 打开设置窗口 |
+| 主窗口标题栏关闭按钮 | **隐藏**主窗口，进程继续托盘常驻（窗口不销毁，下次唤回无需重建） |
 
 ---
 
@@ -75,7 +76,7 @@
 
 **1. 入口与事件汇聚层（`main.rs`）**
 
-程序的唯一「装配点」。启动时先做单实例互斥检查，随后以 `QuitMode::Explicit` 启动 GPUI（窗口关闭不等于退出，保证托盘常驻）。
+程序的唯一「装配点」。启动时先做单实例互斥检查，随后以 `QuitMode::Explicit` 启动 GPUI——关闭窗口不等于结束进程（主窗关闭只是隐藏），托盘常驻，退出走托盘菜单。
 
 三个异构事件源被统一包装成 `AppEvent` 枚举，通过一条 `futures_channel::mpsc` 无界通道送入同一个异步消费任务：
 
@@ -125,6 +126,7 @@
 - `main_window.rs` — 记录总览。日历按「今天向前倒推」逐行生成（每行 7 天，行内首次遇到 `day == 1` 时标注月份），配色由 `ui::calendar_color()` 按当日次数映射到蓝色梯度，形成 GitHub 贡献图式热力图；右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
   - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` 三个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `cache.count(day)`（返回 `usize`）上色；选中日期的明细列表则按 `selected_date` 现取 `cache.times(day)`（借用切片，不拷贝），点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
   - `render()` 只做三件事：组装一次性的 `RenderInput`（`today` / `selected` / 记录快照）、调用三个子视图、拼外壳。时刻与记录因此是**显式传参**，`calendar()` / `timeline()` / `title_actions()` 不会各自去读全局状态。三个子视图的返回类型写成具体的 `Div` 而非 `impl IntoElement`，否则返回值会隐式借用 `&mut Context`，同一个 `render` 里就没法把 `cx` 依次交给多个子视图。
+  - 关闭按钮**不销毁窗口**：`on_window_should_close` 采集并落盘窗口状态后调 `platform::hide_main_window()`，返回 `false` 让 gpui 吞掉 `WM_CLOSE`（不再交给 `DefWindowProc` 销毁）。隐藏期间窗口收不到 `WM_PAINT`，也没有任何路径会 `notify` 它——**记录入库只写缓存、不通知主窗**，所以日历的刷新完全依赖 `show_main_window` 里那次置脏：唤回时重绘一帧，重新 `snapshot()` + `local_date(now())`。
 - `reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
   - **两处倒计时按秒跳动**。实体创建时 `cx.spawn` 起一个 1 秒周期的后台定时任务，每轮醒来 `cx.notify()` 触发重绘（`notify` → `invalidate_view` 置窗口 dirty 并唤醒平台 waker → 下一帧重跑 `render`）。窗口关闭后弱引用升级失败，任务自行退出，不会泄漏。
   - 文案形如 `您在 1 天 2 小时 15 分 30 秒前喝过水（昨天 15:04:32），将于 12 分 3 秒后再次提醒您（15:37:11）`。时间一律写到秒，并用「从最大非零单位一路展开到秒」的写法，避免出现「1 小时 59 秒」这种有歧义的省略。
@@ -140,12 +142,13 @@
 
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
-- 对外接口一律接收 `&gpui::Window`，原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
+- 对外接口一律接收 `&gpui::Window`（只有 `show_main_window` 需要 `&mut`，以便在显示前置脏），原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
 - `style_main_window` / `style_reminder_window` — 通过 DWM 设置窗口圆角（浮层直角、主窗圆角）并去掉系统描边；两者共用同一个 `set_window_chrome`，只差圆角常量
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
 - `set_autostart` — 注册表 Run 键的增删
 - `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定；句柄刻意不关闭，进程存活期间持续持有互斥体
-- `show_main_window` — 按需 `SW_SHOWMAXIMIZED` / `SW_SHOWNOACTIVATE` 并置前
+- `show_main_window` — 按需 `SW_SHOWMAXIMIZED` / `SW_SHOWNOACTIVATE` 并置前；**置脏与显示绑在一起**（先 `Window::refresh()` 再 `ShowWindow`），调用方无法漏掉这一步
+- `hide_main_window` — `ShowWindow(SW_HIDE)`：把窗口从屏幕上撤下但不销毁，HWND、渲染器与窗口内状态全部保留，托盘再次唤回时无需重建
 
 ### 一次提醒的完整数据流
 

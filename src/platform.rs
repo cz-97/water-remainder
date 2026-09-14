@@ -169,12 +169,17 @@ pub fn style_reminder_window(window: &gpui::Window) {
 pub fn style_reminder_window(_: &gpui::Window) {}
 
 /// 把主窗从托盘唤回：沿用最大化状态置前，但不抢焦点。
+///
+/// 置脏与显示绑在一起：不可见窗口收不到 `WM_PAINT`，隐藏期间又没有别的路径
+/// 会 `notify` 这个窗口，只 `ShowWindow` 会被 `invalidator.is_dirty()` 拦下，
+/// 屏幕上残留的仍是隐藏前那一帧。放在这里是为了让调用方无法漏掉这一步。
 #[cfg(windows)]
-pub fn show_main_window(window: &gpui::Window) {
+pub fn show_main_window(window: &mut gpui::Window) {
     use windows::Win32::UI::WindowsAndMessaging::{
         IsZoomed, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow,
     };
 
+    window.refresh();
     let Some(hwnd) = hwnd(window) else {
         return;
     };
@@ -190,4 +195,25 @@ pub fn show_main_window(window: &gpui::Window) {
 }
 
 #[cfg(not(windows))]
-pub fn show_main_window(_: &gpui::Window) {}
+pub fn show_main_window(window: &mut gpui::Window) {
+    window.refresh();
+}
+
+/// 关闭按钮的行为：把主窗从屏幕上撤下，但不销毁窗口。
+///
+/// `ShowWindow(SW_HIDE)` 走的是 gpui 的 `WM_SHOWWINDOW` 分支，而该分支只在
+/// 变为可见时（`wparam == 1`）动作，隐藏方向什么都不做——所以在
+/// `on_window_should_close` 回调里同步调用不会重入 App 借用。
+#[cfg(windows)]
+pub fn hide_main_window(window: &gpui::Window) {
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+
+    if let Some(hwnd) = hwnd(window) {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn hide_main_window(_: &gpui::Window) {}

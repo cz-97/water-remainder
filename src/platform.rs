@@ -101,7 +101,7 @@ pub fn ensure_single_instance() -> bool {
 
 /// 从 GPUI 窗口取出原生 HWND。句柄提取与 `unsafe` 只在这一层出现。
 #[cfg(windows)]
-fn hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundation::HWND> {
+fn hwnd(window: &gpui_kit::Window) -> Option<windows::Win32::Foundation::HWND> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     // `Window` 自带一个同名的固有方法（返回 `AnyWindowHandle`），必须用完全限定
@@ -144,7 +144,7 @@ fn set_window_chrome(
 
 /// 主窗口：启用 DWM 圆角。
 #[cfg(windows)]
-pub fn style_main_window(window: &gpui::Window) {
+pub fn style_main_window(window: &gpui_kit::Window) {
     use windows::Win32::Graphics::Dwm::DWMWCP_ROUND;
 
     if let Some(hwnd) = hwnd(window) {
@@ -153,11 +153,11 @@ pub fn style_main_window(window: &gpui::Window) {
 }
 
 #[cfg(not(windows))]
-pub fn style_main_window(_: &gpui::Window) {}
+pub fn style_main_window(_: &gpui_kit::Window) {}
 
 /// 提醒浮层：禁用 DWM 圆角（铺满整屏时圆角会露出下层桌面）。
 #[cfg(windows)]
-pub fn style_reminder_window(window: &gpui::Window) {
+pub fn style_reminder_window(window: &gpui_kit::Window) {
     use windows::Win32::Graphics::Dwm::DWMWCP_DONOTROUND;
 
     if let Some(hwnd) = hwnd(window) {
@@ -166,7 +166,7 @@ pub fn style_reminder_window(window: &gpui::Window) {
 }
 
 #[cfg(not(windows))]
-pub fn style_reminder_window(_: &gpui::Window) {}
+pub fn style_reminder_window(_: &gpui_kit::Window) {}
 
 /// 把主窗从托盘唤回：沿用最大化状态置前，但不抢焦点。
 ///
@@ -174,7 +174,7 @@ pub fn style_reminder_window(_: &gpui::Window) {}
 /// 会 `notify` 这个窗口，只 `ShowWindow` 会被 `invalidator.is_dirty()` 拦下，
 /// 屏幕上残留的仍是隐藏前那一帧。放在这里是为了让调用方无法漏掉这一步。
 #[cfg(windows)]
-pub fn show_main_window(window: &mut gpui::Window) {
+pub fn show_main_window(window: &mut gpui_kit::Window) {
     use windows::Win32::UI::WindowsAndMessaging::{
         IsZoomed, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SetForegroundWindow, ShowWindow,
     };
@@ -195,7 +195,7 @@ pub fn show_main_window(window: &mut gpui::Window) {
 }
 
 #[cfg(not(windows))]
-pub fn show_main_window(window: &mut gpui::Window) {
+pub fn show_main_window(window: &mut gpui_kit::Window) {
     window.refresh();
 }
 
@@ -205,7 +205,7 @@ pub fn show_main_window(window: &mut gpui::Window) {
 /// 变为可见时（`wparam == 1`）动作，隐藏方向什么都不做——所以在
 /// `on_window_should_close` 回调里同步调用不会重入 App 借用。
 #[cfg(windows)]
-pub fn hide_main_window(window: &gpui::Window) {
+pub fn hide_main_window(window: &gpui_kit::Window) {
     use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
 
     if let Some(hwnd) = hwnd(window) {
@@ -216,4 +216,4 @@ pub fn hide_main_window(window: &gpui::Window) {
 }
 
 #[cfg(not(windows))]
-pub fn hide_main_window(_: &gpui::Window) {}
+pub fn hide_main_window(_: &gpui_kit::Window) {}

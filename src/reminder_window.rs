@@ -3,9 +3,9 @@ use crate::{
     scheduler::{RescheduleType, SchedulerCmd},
     ui::{format_clock_secs, format_day_label, format_span, local_date, now, palette},
 };
-use gpui::{
+use gpui_kit::{
     App, Context, Image, ImageFormat, MouseButton, Rems, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
+    WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,FontWeight
 };
 use std::{sync::mpsc, time::Duration};
 pub struct ReminderWindow {
@@ -89,7 +89,7 @@ impl Render for ReminderWindow {
                 div()
                     .text_color(rgb(palette::WHITE))
                     .text_size(Rems(2.5))
-                    .font_weight(gpui::FontWeight::BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("该喝水了")
                     .mt_24(),
             )

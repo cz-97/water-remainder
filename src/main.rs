@@ -14,8 +14,8 @@ mod ui;
 use config::load_store;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
-use gpui::App;
-use gpui_platform::application;
+use gpui_kit::App;
+use gpui_kit::platform::application;
 use main_window::open_main_window;
 use reminder_window::open_reminder_window;
 use scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
@@ -39,8 +39,11 @@ fn main() {
         return;
     }
     application()
-        .with_quit_mode(gpui::QuitMode::Explicit)
+        .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .run(|cx: &mut App| {
+            // gpui-kit 的契约：开窗前初始化已启用的层。本项目 `default-features = false`，
+            // 只启用 gpui 层，所以这里只登记了 gpui-base 的主题与控件全局态，界面自绘不读它。
+            gpui_kit::init(cx);
             let store = Arc::new(Mutex::new(load_store()));
             let settings = store.lock().unwrap().settings.clone();
             platform::enable_system_menu_theme();
@@ -112,6 +115,6 @@ fn main() {
         });
 }
 
-fn show_reminder(cx: &mut gpui::AsyncApp, scheduler: mpsc::Sender<SchedulerCmd>, remaining: u64) {
+fn show_reminder(cx: &mut gpui_kit::AsyncApp, scheduler: mpsc::Sender<SchedulerCmd>, remaining: u64) {
     let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
 }

@@ -5,8 +5,7 @@ edition = "2024"
 authors = ["cz-97"]
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed" }
+gpui-kit = { version = "0.6", default-features = false }
 tray-icon = "0.19"
 raw-window-handle = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

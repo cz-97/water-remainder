@@ -1,6 +1,6 @@
 # water-remainder
 
-使用 [GPUI](https://github.com/zed-industries/zed)（Zed 编辑器的 GPU 渲染 UI 框架）构建的 Windows 喝水提醒工具。常驻托盘、定时弹窗提醒，并记录每一次喝水打卡，形成日历热力图与时间轴。
+使用 [GPUI](https://github.com/zed-industries/zed)（Zed 编辑器的 GPU 渲染 UI 框架，经 [`gpui-kit`](https://github.com/longbridge/gpui-kit) 引入）构建的 Windows 喝水提醒工具。常驻托盘、定时弹窗提醒，并记录每一次喝水打卡，形成日历热力图与时间轴。
 
 ---
 
@@ -26,12 +26,12 @@
 
 ---
 
-## 技术栈
+# 技术栈
 
 | 领域 | 选型 |
 | --- | --- |
 | 语言 | Rust 2024 edition |
-| UI 渲染 | `gpui` + `gpui_platform`（git 依赖 Zed 主仓） |
+| UI 渲染 | `gpui-kit`（`default-features = false`，只启用 gpui / gpui_platform 两层；组件层与图标资源关闭） |
 | 托盘与菜单 | `tray-icon` / `muda` |
 | 窗口句柄 | `raw-window-handle` + `windows` crate (Win32 / DWM) |
 | 时间处理 | `chrono`（clock 特性） |
@@ -76,7 +76,7 @@
 
 **1. 入口与事件汇聚层（`main.rs`）**
 
-程序的唯一「装配点」。启动时先做单实例互斥检查，随后以 `QuitMode::Explicit` 启动 GPUI——关闭窗口不等于结束进程（主窗关闭只是隐藏），托盘常驻，退出走托盘菜单。
+程序的唯一「装配点」。启动时先做单实例互斥检查，随后 `gpui_kit::init(cx)` 初始化 gpui-kit 已启用的层，再以 `QuitMode::Explicit` 启动 GPUI——关闭窗口不等于结束进程（主窗关闭只是隐藏），托盘常驻，退出走托盘菜单。
 
 三个异构事件源被统一包装成 `AppEvent` 枚举，通过一条 `futures_channel::mpsc` 无界通道送入同一个异步消费任务：
 
@@ -103,7 +103,7 @@
 
 拆成两个互不干扰的持久化通道：
 
-- `config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS` 常量表用宏生成 `(秒, "N 分钟")` 二元组，UI 与调度共用同一份数据源。
+- `config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。
 - `data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。记录以 **`DrinkCache`（`BTreeMap<NaiveDate, Vec<u64>>`，按本地日期分桶、桶内升序）做进程内全量缓存**：首次 `snapshot()` 读取一次数据库并完成分桶，之后渲染只走内存；`save_time()` 落库成功后把新时间戳增量塞进所属日期的桶。提醒文案与调度需要的「上次喝水距今」也由 `get_elapsed()` 从这份缓存取（`last_time()` = `BTreeMap` 尾桶的尾元素），不再单独维护一份时间戳。
 
 **记录缓存的生命周期（`data.rs`）**
@@ -136,13 +136,13 @@
 
 `ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
-`palette` 是全部界面颜色的唯一来源。因为 `gpui::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
+`palette` 是全部界面颜色的唯一来源。因为 `gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
 
 **5. 平台适配层（`platform.rs`）**
 
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
-- 对外接口一律接收 `&gpui::Window`（只有 `show_main_window` 需要 `&mut`，以便在显示前置脏），原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
+- 对外接口一律接收 `&gpui_kit::Window`（只有 `show_main_window` 需要 `&mut`，以便在显示前置脏），原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
 - `style_main_window` / `style_reminder_window` — 通过 DWM 设置窗口圆角（浮层直角、主窗圆角）并去掉系统描边；两者共用同一个 `set_window_chrome`，只差圆角常量
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
 - `set_autostart` — 注册表 Run 键的增删
@@ -210,4 +210,8 @@ src/
 ## 说明
 
 - 目前仅 Windows 平台做了完整适配（托盘、注册表自启、DWM 样式）；非 Windows 下 `platform.rs` 为空实现，可编译运行但样式与自启能力受限。
-- `gpui` 依赖 Zed 主仓的最新提交，首次构建耗时较长，且 API 存在上游变动风险。
+- UI 依赖只声明 `gpui-kit` 一项，不再直接依赖 Zed 主仓。`gpui-kit` 是 longbridge 基于 GPUI 的组件库，它内部依赖把 Zed 的 `gpui` 重新发布的 crates.io 快照 `gpui-pre`（本版本对应 `zed@d89e9c2`），并把 gpui 全部根命名空间重导出——`gpui_kit::*` 就是 gpui，`gpui_kit::platform` 就是 `gpui_platform`。
+  - 收益：不再需要 git checkout、版本可锁定、`cargo fetch` 走镜像。
+  - 代价：底层 rev 由 `gpui-kit` 决定，上游变更只能等它跟进；且 `gpui-kit` 固定为 `gpui_platform` 打开 `font-kit` / `x11` / `wayland` / `runtime_shaders`，为 `gpui-pre` 打开 `windows-manifest`，这些特性无法从本项目侧关闭。
+- `default-features = false` 关掉了 gpui-kit 的 `component` 与 `assets`：界面继续完全由本项目自绘（`palette` + `ui.rs` 的标题栏部件），不引入 shadcn 主题，也不嵌入图标资源。
+- 启动时调用一次 `gpui_kit::init(cx)`（gpui-kit 的契约）。当前只启用 gpui 层，它实际只登记了 `gpui-base` 的主题与各控件全局态，本项目界面自绘、不读这些全局量。

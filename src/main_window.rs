@@ -9,9 +9,9 @@ use crate::{
     },
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
-use gpui::{
+use gpui_kit::{
     App, Bounds, Context, Div, MouseButton, Window, WindowBounds, WindowControlArea, WindowKind,
-    WindowOptions, div, point, prelude::*, px, rgb, size,
+    WindowOptions, div, point, prelude::*, px, rgb, size,FontWeight,TitlebarOptions
 };
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -194,7 +194,7 @@ impl Render for MainWindow {
                                     .flex_col()
                                     .items_center()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(FontWeight::BOLD)
                                     .child("喝水记录"),
                             )
                             .child(calendar),
@@ -207,7 +207,7 @@ impl Render for MainWindow {
                             .child(
                                 div()
                                     .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .font_weight(FontWeight::BOLD)
                                     .child(format_date(input.selected)),
                             )
                             .child(div().mt_1().text_color(rgb(palette::TEXT_MUTED)).child(
@@ -290,7 +290,7 @@ fn create_main_window(
         .open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
-                titlebar: Some(gpui::TitlebarOptions {
+                titlebar: Some(TitlebarOptions {
                     title: Some("喝水提醒".into()),
                     appears_transparent: true,
                     ..Default::default()

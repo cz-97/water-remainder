@@ -1,8 +1,8 @@
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
-use gpui::{Div, Stateful, WindowControlArea, div, prelude::*, px, rgb};
+use gpui_kit::{Div, Stateful, WindowControlArea, div, prelude::*, px, rgb,FontWeight};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 界面配色唯一来源。`gpui::rgb()` 不是 `const fn`，无法定义 `const Rgba`，
+/// 界面配色唯一来源。`gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，
 /// 因此这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`。
 pub mod palette {
     // 窗口外壳
@@ -36,8 +36,8 @@ pub mod palette {
     ];
 
     /// 提醒浮层的半透明遮罩（此处是 hsla，不是 rgb）。
-    pub fn overlay_bg() -> gpui::Hsla {
-        gpui::hsla(0., 0., 0., 0.85)
+    pub fn overlay_bg() -> gpui_kit::Hsla {
+        gpui_kit::hsla(0., 0., 0., 0.85)
     }
 }
 
@@ -108,7 +108,7 @@ pub fn format_date(date: NaiveDate) -> String {
 }
 
 /// 次数 → 热力图等级：每 3 次升一级并封顶，0 次单独一档。
-pub fn calendar_color(count: usize) -> gpui::Rgba {
+pub fn calendar_color(count: usize) -> gpui_kit::Rgba {
     let level = count.div_ceil(3).min(palette::CALENDAR.len() - 1);
     rgb(palette::CALENDAR[level])
 }
@@ -139,7 +139,7 @@ pub fn titlebar(title: &'static str, actions: impl IntoElement) -> impl IntoElem
                 .items_center()
                 .px_4()
                 .text_color(rgb(palette::TITLEBAR_FG))
-                .font_weight(gpui::FontWeight::BOLD)
+                .font_weight(FontWeight::BOLD)
                 .window_control_area(WindowControlArea::Drag)
                 .child(title),
         )

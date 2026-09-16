@@ -4,7 +4,7 @@ use crate::{
     scheduler::{RescheduleType, SchedulerCmd},
     ui::{palette, titlebar, window_button},
 };
-use gpui::{
+use gpui_kit::{
     App, Context, MouseButton, Window, WindowBounds, WindowControlArea, WindowKind, WindowOptions,
     div, prelude::*, px, rgb, size,
 };
@@ -177,7 +177,7 @@ fn switch(enabled: bool) -> impl IntoElement {
         )
 }
 
-fn step_button(label: &'static str, enabled: bool) -> gpui::Div {
+fn step_button(label: &'static str, enabled: bool) -> gpui_kit::Div {
     div()
         .w(px(28.))
         .h(px(28.))

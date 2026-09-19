@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
-use gpui_kit::{Div, Stateful, WindowControlArea, div, prelude::*, px, rgb,FontWeight};
+use gpui_kit::{Div, FontWeight, Stateful, WindowControlArea, div, prelude::*, px, rgb};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 界面配色唯一来源。`gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，
@@ -52,6 +52,20 @@ pub fn local_date(timestamp: u64) -> NaiveDate {
         .map(|d| d.with_timezone(&Local).date_naive())
         .unwrap_or_else(|| Local::now().date_naive())
 }
+/// 本地时区下某一天的秒区间 `[起, 止)`，用于把「某天明细」变成一次索引区间查询。
+/// 与 `local_date()` 共用同一套时区规则，因此区间内的记录与「按时间戳判定的本地日期」严格一致。
+/// 只有本地零点不存在的时区（DST 会跳过零点的少数地区）才会返回 `None`，由调用方降级处理。
+pub fn day_bounds(day: NaiveDate) -> Option<(u64, u64)> {
+    Some((local_midnight(day)?, local_midnight(day.succ_opt()?)?))
+}
+
+fn local_midnight(day: NaiveDate) -> Option<u64> {
+    day.and_hms_opt(0, 0, 0)?
+        .and_local_timezone(Local)
+        .earliest()
+        .map(|dt| dt.timestamp() as u64)
+}
+
 pub fn format_clock(timestamp: u64) -> String {
     DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
         .map(|d| d.with_timezone(&Local).format("%H:%M").to_string())

@@ -1,6 +1,6 @@
 use crate::{
     config::{Store, WindowState, save_store},
-    data::{DrinkCache, snapshot},
+    data::{DayCounts, day_counts, day_detail},
     scheduler::SchedulerCmd,
     settings_window::{close_settings_window, open_settings_window},
     ui::{
@@ -10,17 +10,20 @@ use crate::{
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
 use gpui_kit::{
-    App, Bounds, Context, Div, MouseButton, Window, WindowBounds, WindowControlArea, WindowKind,
-    WindowOptions, div, point, prelude::*, px, rgb, size,FontWeight,TitlebarOptions
+    App, Bounds, Context, Div, FontWeight, MouseButton, TitlebarOptions, Window, WindowBounds,
+    WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use std::sync::{Arc, Mutex, mpsc};
 
-/// 一次渲染的全部外部输入。显式传递，「当前时刻」与「记录快照」因此
-/// 只在这一处取得，子视图不再各自去读全局状态。
+/// 一次渲染的全部外部输入。显式传递，「当前时刻」与「记录」因此只在这一处取得，
+/// 子视图不再各自去读全局状态。
 struct RenderInput {
     today: NaiveDate,
     selected: NaiveDate,
-    cache: Arc<DrinkCache>,
+    /// 天级聚合：日历上色只需要每天的次数。
+    counts: Arc<DayCounts>,
+    /// 选中那天的明细，懒加载的结果（次数为 0 时为空）。
+    detail: Arc<Vec<u64>>,
 }
 
 pub struct MainWindow {
@@ -34,7 +37,7 @@ pub struct MainWindow {
 impl MainWindow {
     /// 日历热力图：只用到每天的条数，不碰明细。
     fn calendar(&self, input: &RenderInput, cx: &mut Context<Self>) -> Div {
-        let earliest = input.cache.earliest_day().unwrap_or(input.today);
+        let earliest = input.counts.earliest_day().unwrap_or(input.today);
         let earliest_month_start = earliest.with_day(1).unwrap_or(earliest);
         let day_count = input
             .today
@@ -53,7 +56,7 @@ impl MainWindow {
             let mut week = div().flex().gap_1();
             for offset in 0..7 {
                 let day = input.today - DateDuration::days((row * 7 + offset) as i64);
-                let count = input.cache.count(day);
+                let count = input.counts.count(day);
                 let mut cell = div()
                     .w(px(24.))
                     .h(px(24.))
@@ -88,9 +91,9 @@ impl MainWindow {
         calendar.mt_4()
     }
 
-    /// 右侧时间轴：只在这按选中日期取明细（借用切片，不拷贝）。
+    /// 右侧时间轴：只渲染选中日的明细，明细本身是懒加载的结果（借用 `Arc`，不拷贝）。
     fn timeline(&self, input: &RenderInput) -> Div {
-        let timestamps = input.cache.times(input.selected);
+        let timestamps = input.detail.as_slice();
         let mut records = div().flex().flex_col().gap_2().mt_3();
         if timestamps.is_empty() {
             records = records.child(
@@ -159,11 +162,13 @@ impl MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 全量记录走进程内缓存：首次访问读一次数据库，之后只读内存。
+        // 记录分两层：日历只用天级聚合（首次访问读一次库），明细只在选中那天取一次，
+        // 且那天次数为 0 时连库都不碰。
         let input = RenderInput {
             today: local_date(now()),
             selected: self.selected_date,
-            cache: snapshot(),
+            counts: day_counts(),
+            detail: day_detail(self.selected_date),
         };
         let calendar = self.calendar(&input, cx);
         let timeline = self.timeline(&input);

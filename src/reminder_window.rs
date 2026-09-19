@@ -4,8 +4,8 @@ use crate::{
     ui::{format_clock_secs, format_day_label, format_span, local_date, now, palette},
 };
 use gpui_kit::{
-    App, Context, Image, ImageFormat, MouseButton, Rems, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,FontWeight
+    App, Context, FontWeight, Image, ImageFormat, MouseButton, Rems, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
 };
 use std::{sync::mpsc, time::Duration};
 pub struct ReminderWindow {

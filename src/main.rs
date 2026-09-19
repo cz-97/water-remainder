@@ -115,6 +115,10 @@ fn main() {
         });
 }
 
-fn show_reminder(cx: &mut gpui_kit::AsyncApp, scheduler: mpsc::Sender<SchedulerCmd>, remaining: u64) {
+fn show_reminder(
+    cx: &mut gpui_kit::AsyncApp,
+    scheduler: mpsc::Sender<SchedulerCmd>,
+    remaining: u64,
+) {
     let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
 }

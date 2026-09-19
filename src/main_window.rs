@@ -209,19 +209,18 @@ impl Render for MainWindow {
                             .w(px(250.))
                             .flex()
                             .flex_col()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(format_date(input.selected)),
-                            )
-                            .child(div().mt_1().text_color(rgb(palette::TEXT_MUTED)).child(
-                                if input.selected == input.today {
-                                    "今天"
-                                } else {
-                                    "历史记录"
+                            .child(div().text_xl().font_weight(FontWeight::BOLD).child(
+                                match input.selected == input.today {
+                                    true => "今天",
+                                    false => "历史记录",
                                 },
                             ))
+                            .child(
+                                div()
+                                    .mt_1()
+                                    .text_color(rgb(palette::TEXT_MUTED))
+                                    .child(format_date(input.selected)),
+                            )
                             .child(timeline),
                     ),
             )

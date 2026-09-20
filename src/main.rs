@@ -52,10 +52,16 @@ fn main() {
             std::mem::forget(tray);
             let (scheduler_tx, alarm_rx) = start_scheduler();
             // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。
+            // `Subscription` 是 RAII 守卫，drop 即注销回调。而 `run` 的启动闭包在
+            // 消息循环开始之前就返回了（`gpui-pre-windows/src/platform.rs:508`：先调用
+            // `on_finish_launching()`，之后才 `GetMessageW`），绑定在闭包里的守卫会被
+            // 立刻丢弃 —— 必须 `detach()`，否则唤醒回调永远不会被调用。
+            // 上面 `std::mem::forget(tray)` 处理的是同一个「闭包提前返回」问题。
             let wake_tx = scheduler_tx.clone();
-            let _wake_subscription = cx.on_system_wake(move |_| {
+            cx.on_system_wake(move |_| {
                 let _ = wake_tx.send(SchedulerCmd::Reschedule(RescheduleType::Wake));
-            });
+            })
+            .detach();
             let show_id = show.id().clone();
             let quit_id = quit.id().clone();
             let shared_store = store.clone();

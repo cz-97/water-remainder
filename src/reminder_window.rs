@@ -111,20 +111,32 @@ impl Render for ReminderWindow {
     }
 }
 pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remaining: u64) {
-    if cx
+    let last_drink = last_time();
+    let next_reminder = now() + remaining;
+
+    // 已经有浮层时不能只是默默返回：浮层可能在屏幕还没亮、显示器正在重枚举、渲染
+    // 设备刚丢失的那个瞬间被创建出来，用户根本看不见它，而它除了被点击「喝了」/
+    // 「跳过」之外不会被自动关闭 —— 一旦如此，此后每一次提醒都会被这里吞掉，直到
+    // 重启进程。所以改为原地更新两份状态并重绘。
+    if let Some(handle) = cx
         .windows()
         .iter()
-        .any(|w| w.downcast::<ReminderWindow>().is_some())
+        .find_map(|w| w.downcast::<ReminderWindow>())
     {
+        let _ = handle.update(cx, |view, window, cx| {
+            view.last_drink = last_drink;
+            view.next_reminder = next_reminder;
+            window.refresh();
+            cx.notify();
+        });
         return;
     }
+
     let display = match cx.primary_display() {
         Some(d) => d,
         None => return,
     };
     let bounds = display.bounds();
-    let last_drink = last_time();
-    let next_reminder = now() + remaining;
     let handle = cx
         .open_window(
             WindowOptions {

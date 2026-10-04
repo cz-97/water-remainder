@@ -145,7 +145,9 @@
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
 - 对外接口一律接收 `&gpui_kit::Window`（只有 `show_main_window` 需要 `&mut`，以便在显示前置脏），原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
-- `style_main_window` / `style_reminder_window` — 两者都经 `set_window_chrome` 设置 DWM 圆角（主窗圆角、浮层直角）。**`style_reminder_window` 还负责把浮层铺满整屏**：只信 `display.bounds()` 不够，gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666` 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带（而浮层带 `WS_EX_TOPMOST`，缺的正是屏幕最底下一条）。做法是实测窗口非客户区边框厚度 `non_client_insets`，再把**窗口**放大到「显示器尺寸 + 两侧边框」、位置左上各让出边框，使**客户区**（真正被绘制的那块）恰好盖满显示器。边框厚度随系统主题与 DPI 缩放而变，所以只实测、不用 `AdjustWindowRectEx` 推算。取不到显示器矩形或边框就整个跳过，绝不猜一个位置把窗口甩出屏幕
+- `style_main_window` / `style_reminder_window` — 两者都经 `set_window_chrome` 设置 DWM 圆角（主窗圆角、浮层直角）。**`style_reminder_window` 还负责把浮层铺满整屏**：只信 `display.bounds()` 不够，gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666` 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带；而浮层带 `WS_EX_TOPMOST`，缺哪条边都是直接看见桌面。`fit_client_to_monitor` 的做法是**实测差值**而非算边框厚度：分别拿到客户区在屏幕上的四边与显示器矩形的四边，按差值调整位置与大小，使**客户区**（真正被绘制的那块）恰好等于显示器矩形。这样不依赖「边框厚度是常数」这个假设 —— 缝隙出现在哪条边、边框变成多厚，都会被拉回 0。全程物理像素，不经逻辑像素换算（5px 正是往返换算截断造成的）
+- 浮层开着时用户可能改分辨率、拔接显示器，因此浮层 View 上还挂了 `observe_window_bounds` → `refit_reminder_window` 重新对齐。`fit_client_to_monitor` 是**幂等**的（已对齐时四个差值全为 0 直接返回），所以它自己触发的 `WM_MOVE` 再回调一次也不会递归
+- 取不到显示器矩形或客户区矩形时整个跳过，绝不猜一个位置把窗口甩出屏幕
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
 - `set_autostart` — 注册表 Run 键的增删
 - `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定；句柄刻意不关闭，进程存活期间持续持有互斥体

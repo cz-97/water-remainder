@@ -26,6 +26,21 @@ pub struct ReminderWindow {
 }
 
 impl ReminderWindow {
+    /// 浮层开着时用户可能改分辨率、拔接显示器，屏幕矩形会变，重新对齐一次。
+    ///
+    /// 订阅必须挂到 View 上（而不是开窗闭包里的 `window`）：`bounds` 观察者
+    /// 需要 `Context<Self>`。且必须 `detach()`，否则 `Subscription` 在
+    /// `new()` 返回时就被 drop，回调立刻注销。
+    ///
+    /// `refit_reminder_window` 是幂等的（已对齐就直接返回），所以它触发的
+    /// `WM_MOVE` 再回调一次也不会递归。
+    fn observe_monitor_changes(window: &mut Window, cx: &mut Context<Self>) {
+        cx.observe_window_bounds(window, |_, window, _| {
+            crate::platform::refit_reminder_window(window);
+        })
+        .detach();
+    }
+
     /// 两句话都在 render 里按「当前时刻」现算，因此每秒重绘一次就能按秒跳动。
     fn status_text(&self) -> String {
         let current = now();
@@ -185,6 +200,9 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remain
                         }
                     })
                     .detach();
+
+                    // 这里已经能拿到 `Context<ReminderWindow>`，把 bounds 观察者挂上。
+                    ReminderWindow::observe_monitor_changes(window, cx);
 
                     ReminderWindow {
                         scheduler: tx,

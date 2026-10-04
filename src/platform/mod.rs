@@ -154,28 +154,62 @@ pub fn style_main_window(_: &gpui_kit::Window) {}
 /// 提醒浮层：铺满整屏。
 ///
 /// 这里必须**自己**把客户区对齐到显示器矩形，不能只信 `display.bounds()`：
-/// gpui 把逻辑像素经 `to_device_pixels` 换算回物理像素时，`1706.6666 × 1066.6666`
+/// gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666`
 /// 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带。
-/// 而且浮层带着 `WS_EX_TOPMOST`，缺的正是屏幕最底下一条。
+/// 而浮层带 `WS_EX_TOPMOST`，缺哪条边都是直接看见桌面。
 ///
-/// 做法是实测窗口的非客户区边框厚度（这个值随系统主题、缩放而变，只有实测可靠），
-/// 再把**窗口**放大到「显示器尺寸 + 两侧边框」、位置相应左移上移，使**客户区**
-/// 恰好盖满显示器。客户区才是真正被绘制的那块。
+/// 做法是**实测差值**而不是算边框厚度：分别拿到客户区在屏幕上的四个边与显示器
+/// 矩形的四个边，按差值调整窗口位置与大小，使客户区恰好等于显示器矩形。
+///
+/// 为什么不用「测量非客户区边框厚度再加回去」：那种做法把边框厚度当常数，
+/// 一旦它变化（换显示器、改缩放、或系统主题改变描边），多算/少算的量就会
+/// 全部堆到某一条边上，窄缝就会跑到顶部或左侧。差值修正是**自纠正**的 ——
+/// 不管缝隙原本出现在哪条边、也不管边框变成多厚，都会被拉回 0。
+///
+/// 这个函数是幂等的：已对齐时四个差值全为 0，直接返回。因此可以在窗口
+/// 每次移动 / 改变尺寸时重跑（见 `refit_reminder_window`），不会因为
+/// `SetWindowPos` 触发 `WM_MOVE` 而递归。
 #[cfg(windows)]
 pub fn style_reminder_window(window: &gpui_kit::Window) {
     use windows::Win32::Graphics::Dwm::DWMWCP_DONOTROUND;
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER,
-    };
 
     let Some(hwnd) = hwnd(window) else {
         return;
     };
     // 圆角要先关掉：铺满整屏时圆角会露出下层桌面。
     set_window_chrome(hwnd, DWMWCP_DONOTROUND);
+    fit_client_to_monitor(hwnd);
+}
+
+#[cfg(not(windows))]
+pub fn style_reminder_window(_: &gpui_kit::Window) {}
+
+/// 浮层被移动 / 改变尺寸后重新对齐。
+///
+/// 必要性：浮层开着的时候用户可能改分辨率、拔掉或接上显示器。此时客户区
+/// 与新显示器不再一致，缝隙会重新出现。`bounds` 观察者会反复回调，因此本函数
+/// 必须幂等 —— 它确实是（见 `fit_client_to_monitor`）。
+#[cfg(windows)]
+pub fn refit_reminder_window(window: &gpui_kit::Window) {
+    if let Some(hwnd) = hwnd(window) {
+        fit_client_to_monitor(hwnd);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn refit_reminder_window(_: &gpui_kit::Window) {}
+
+/// 把**客户区**（真正被绘制的那块）拉到与显示器矩形重合。
+///
+/// 全程物理像素，不经逻辑像素换算 —— 5px 那个缝隙正是往返换算截断造成的。
+/// 已经对齐时直接返回，所以可以随便重复调用。
+#[cfg(windows)]
+fn fit_client_to_monitor(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClientRect, GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER,
+    };
 
     unsafe {
         let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -188,72 +222,45 @@ pub fn style_reminder_window(window: &gpui_kit::Window) {
             return;
         }
         let screen = monitor_info.rcMonitor;
-        if let Some(insets) = non_client_insets(hwnd) {
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                // 左上角各让出边框厚度，客户区才从屏幕的 0,0 开始。
-                screen.left - insets.left,
-                screen.top - insets.top,
-                (screen.right - screen.left) + insets.left + insets.right,
-                (screen.bottom - screen.top) + insets.top + insets.bottom,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
-            );
-        }
-    }
-}
 
-#[cfg(not(windows))]
-pub fn style_reminder_window(_: &gpui_kit::Window) {}
-
-/// 窗口四周非客户区（边框）的厚度，单位为物理像素。
-///
-/// 直接实测而不是用 `AdjustWindowRectEx` 推算：`PopUp` 窗口带 `WS_EX_TOPMOST`，
-/// 系统主题与 DPI 缩放都会改变这个厚度，推算值与实际不符（gpui 自己也因此
-/// 预留下这条修正路径）。实测法对两者都成立。
-#[cfg(windows)]
-struct WindowInsets {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-}
-
-#[cfg(windows)]
-unsafe fn non_client_insets(hwnd: windows::Win32::Foundation::HWND) -> Option<WindowInsets> {
-    use windows::Win32::Foundation::{POINT, RECT};
-    use windows::Win32::Graphics::Gdi::ClientToScreen;
-    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
-
-    unsafe {
         let mut window_rect = RECT::default();
         let mut client_rect = RECT::default();
         if GetWindowRect(hwnd, &mut window_rect).is_err()
             || GetClientRect(hwnd, &mut client_rect).is_err()
         {
-            return None;
+            return;
         }
-        // `GetClientRect` 返回的是客户区内的坐标，要靠 `ClientToScreen` 才能拿到
+        // `GetClientRect` 给的是客户区内的坐标，要靠 `ClientToScreen` 才知道
         // 它在屏幕上的实际位置。
-        let mut client_top_left = POINT {
-            x: client_rect.left,
-            y: client_rect.top,
-        };
-        let mut client_bottom_right = POINT {
-            x: client_rect.right,
-            y: client_rect.bottom,
-        };
+        let mut client_top_left = POINT { x: client_rect.left, y: client_rect.top };
+        let mut client_bottom_right = POINT { x: client_rect.right, y: client_rect.bottom };
         if !ClientToScreen(hwnd, &mut client_top_left).as_bool()
             || !ClientToScreen(hwnd, &mut client_bottom_right).as_bool()
         {
-            return None;
+            return;
         }
-        Some(WindowInsets {
-            left: client_top_left.x - window_rect.left,
-            top: client_top_left.y - window_rect.top,
-            right: window_rect.right - client_bottom_right.x,
-            bottom: window_rect.bottom - client_bottom_right.y,
-        })
+
+        // 每条边各自要移动多少（向右 / 向下为正）。
+        let move_x = screen.left - client_top_left.x;
+        let move_y = screen.top - client_top_left.y;
+        // 尺寸要补上移动带来的缺口：先把左边缘挪到位，右边缘就跟着变，
+        // 所以宽高只补「移动之后仍然差的那部分」。
+        let width_gap = (screen.right - client_bottom_right.x) - move_x;
+        let height_gap = (screen.bottom - client_bottom_right.y) - move_y;
+
+        if move_x == 0 && move_y == 0 && width_gap == 0 && height_gap == 0 {
+            return; // 已对齐：这也是递归的终止条件
+        }
+
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            window_rect.left + move_x,
+            window_rect.top + move_y,
+            (window_rect.right - window_rect.left) + width_gap,
+            (window_rect.bottom - window_rect.top) + height_gap,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        );
     }
 }
 

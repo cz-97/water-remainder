@@ -38,6 +38,8 @@ fn main() {
             // gpui-kit 的契约：开窗前初始化已启用的层。本项目 `default-features = false`，
             // 只启用 gpui 层，所以这里只登记了 gpui-base 的主题与控件全局态，界面自绘不读它。
             gpui_kit::init(cx);
+            // 组件库默认浅色主题；本项目界面为深色，统一切到暗色。
+            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
             let store = Arc::new(Mutex::new(load_store()));
             let settings = store.lock().unwrap().settings.clone();
             platform::enable_system_menu_theme();

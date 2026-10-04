@@ -1,6 +1,6 @@
 # water-remainder
 
-使用 [GPUI](https://github.com/zed-industries/zed)（Zed 编辑器的 GPU 渲染 UI 框架，经 [`gpui-kit`](https://github.com/longbridge/gpui-kit) 引入）构建的 Windows 喝水提醒工具。常驻托盘、定时弹窗提醒，并记录每一次喝水打卡，形成日历热力图与时间轴。
+使用 [GPUI](https://github.com/zed-industries/zed)（Zed 编辑器的 GPU 渲染 UI 框架，经 [`gpui-kit`](https://github.com/longbridge/gpui-kit) 引入）构建的 Windows 喝水提醒工具。常驻托盘、定时弹窗提醒，并记录每一次喝水打卡，形成月历热力图与时间轴。
 
 ---
 
@@ -8,7 +8,7 @@
 
 - **定时提醒** — 到点后全屏透明浮层提示「该喝水了」，可选择「喝了」或「跳过」；浮层上「上次喝水 / 下次提醒」两处倒计时按秒实时跳动，并附具体时刻
 - **智能顺延** — 提醒时间基于**最近一次喝水记录**计算；休眠唤醒后自动重新计算，不会因为合盖而漏提醒
-- **喝水记录** — 每次打卡写入本地 SQLite，主窗口以日历热力图 + 当日时间轴展示
+- **喝水记录** — 每次打卡写入本地 SQLite，主窗口以月历热力图 + 当日时间轴展示
 - **间隔可调** — 15 ~ 75 分钟，步进式调节（默认 45 分钟）
 - **开机启动** — 写入 `HKCU\...\CurrentVersion\Run` 注册表项
 - **单实例运行** — 基于命名互斥体，重复启动直接退出
@@ -132,8 +132,8 @@
 
 三个独立的 GPUI 窗口，各自是实现了 `Render` 的 View：
 
-- `ui/main_window.rs` — 记录总览。日历按「今天向前倒推」逐行生成（每行 7 天，行内首次遇到 `day == 1` 时标注月份），配色由 `ui::calendar_color()` 按当日次数映射到蓝色梯度，形成 GitHub 贡献图式热力图；右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
-  - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` 三个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `counts.count(day)`（返回 `usize`）上色；右侧明细先经 `day_detail(selected)` 取到（懒加载 + 缓存），再按 `Arc` 借用渲染；点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
+- `ui/main_window.rs` — 记录总览。日历为月视图：标题是「年 月」，左右箭头切换 `view_month`（右箭头逐月前进、不允许翻到未来；左箭头逐月后退、退到 `DayCounts::earliest_day` 所在的最早记录月为止），每周以周一为首列；每格是当月某天，背景统一由 `ui::calendar_color()` 按当日次数映射到蓝色梯度（0 次保留色阶底色的深灰格，浅色格用深色数字保证可读），选中日加白框。右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
+  - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` / `view_month` 四个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `counts.count(day)`（返回 `usize`）上色；右侧明细先经 `day_detail(selected)` 取到（懒加载 + 缓存），再按 `Arc` 借用渲染；点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
   - `render()` 只做三件事：组装一次性的 `RenderInput`（`today` / `selected` / 天级聚合 / 选中日明细）、调用三个子视图、拼外壳。时刻与记录因此是**显式传参**，`calendar()` / `timeline()` / `title_actions()` 不会各自去读全局状态。三个子视图的返回类型写成具体的 `Div` 而非 `impl IntoElement`，否则返回值会隐式借用 `&mut Context`，同一个 `render` 里就没法把 `cx` 依次交给多个子视图。
   - 关闭按钮**不销毁窗口**：`on_window_should_close` 采集并落盘窗口状态后调 `platform::hide_main_window()`，返回 `false` 让 gpui 吞掉 `WM_CLOSE`（不再交给 `DefWindowProc` 销毁）。隐藏期间窗口收不到 `WM_PAINT`，也没有任何路径会 `notify` 它——**记录入库只写缓存、不通知主窗**，所以日历的刷新完全依赖 `show_main_window` 里那次置脏：唤回时重绘一帧，重新取聚合与选中日明细（都命中缓存）+ `local_date(now())`。
 - `ui/reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
@@ -211,7 +211,7 @@ src/
 │   └── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
 ├── ui/                      界面（GPUI View 与共享部件）
 │   ├── mod.rs               时间工具、palette 配色、标题栏与共用按钮样式
-│   ├── main_window.rs       主窗口：日历热力图 + 时间轴
+│   ├── main_window.rs       主窗口：月历 + 时间轴
 │   ├── reminder_window.rs   全屏提醒浮层
 │   └── settings_window.rs   设置窗口
 ├── platform/                系统适配

@@ -39,6 +39,9 @@ pub mod palette {
         0x404040, 0xdbeafe, 0xbfdbfe, 0x93c5fd, 0x60a5fa, 0x3b82f6, 0x2563eb, 0x1d4ed8, 0x1e3a8a,
     ];
 
+    /// 浅色热力图格子上的深色文字（让日期数字在浅蓝底上仍可读）。
+    pub const CALENDAR_TEXT_DARK: u32 = 0x0f172a;
+
     /// 提醒浮层的半透明遮罩（此处是 hsla，不是 rgb）。
     pub fn overlay_bg() -> gpui_kit::Hsla {
         gpui_kit::hsla(0., 0., 0., 0.85)
@@ -126,9 +129,13 @@ pub fn format_date(date: NaiveDate) -> String {
 }
 
 /// 次数 → 热力图等级：每 3 次升一级并封顶，0 次单独一档。
+pub fn calendar_level(count: usize) -> usize {
+    count.div_ceil(3).min(palette::CALENDAR.len() - 1)
+}
+
+/// 次数 → 热力图取色，等级由 `calendar_level` 给出。
 pub fn calendar_color(count: usize) -> gpui_kit::Rgba {
-    let level = count.div_ceil(3).min(palette::CALENDAR.len() - 1);
-    rgb(palette::CALENDAR[level])
+    rgb(palette::CALENDAR[calendar_level(count)])
 }
 
 /// 自绘标题栏高度。栏内按钮与它同高，所以两者共用一个常量。

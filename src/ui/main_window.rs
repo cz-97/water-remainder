@@ -5,15 +5,17 @@ use crate::{
         scheduler::SchedulerCmd,
     },
     ui::{
-        ACTION_ICON_SIZE, calendar_color, format_clock, format_date, local_date, now, palette,
-        relative_to_now, settings_window::{close_settings_window, open_settings_window},
+        ACTION_ICON_SIZE, calendar_color, calendar_level, format_clock, format_date, local_date,
+        now, palette, relative_to_now,
+        settings_window::{close_settings_window, open_settings_window},
         titlebar, titlebar_button, window_button,
     },
 };
-use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate};
 use gpui_kit::{
-    App, Bounds, Context, Div, FontWeight, MouseButton, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, Div, FontWeight, MouseButton, Stateful, TitlebarOptions, Window,
+    WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb,
+    size,
 };
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -32,40 +34,89 @@ pub struct MainWindow {
     store: Arc<Mutex<Store>>,
     scheduler: mpsc::Sender<SchedulerCmd>,
     selected_date: NaiveDate,
+    /// 日历当前展示的月份（该月 1 号）。左右箭头切换，初始为当月。
+    view_month: NaiveDate,
 }
 
 // 三个子视图都返回具体的 `Div` 而非 `impl IntoElement`：后者会让返回值
 // 隐式借用 `&mut Context`，同一个 `render` 里就无法再把它交给别的子视图。
 impl MainWindow {
-    /// 日历热力图：只用到每天的条数，不碰明细。
+    /// 月视图日历：标题为「年 月」，左右箭头切换月份。每格是当月某天，
+    /// 背景按次数上色（0 次为色阶底色），选中日加白框。
     fn calendar(&self, input: &RenderInput, cx: &mut Context<Self>) -> Div {
-        let earliest = input.counts.earliest_day().unwrap_or(input.today);
-        let earliest_month_start = earliest.with_day(1).unwrap_or(earliest);
-        let day_count = input
-            .today
-            .signed_duration_since(earliest_month_start)
-            .num_days()
-            .max(0) as usize
-            + 1;
-        let row_count = day_count.div_ceil(7).max(1);
+        let month = self.view_month;
+        let days = days_in_month(month);
+        // 周一为每周首列：0 = 周一。
+        let leading = month.weekday().num_days_from_monday() as u32;
+        // 左箭头：逐月后退，退到最早有记录的月份为止，再往前则置灰。
+        let earliest_month = input
+            .counts
+            .earliest_day()
+            .map(|day| day.with_day(1).unwrap_or(day));
+        let prev_month = match earliest_month {
+            Some(earliest) if month > earliest => Some(shift_month(month, -1)),
+            _ => None,
+        };
+        // 右箭头：逐月前进，不允许翻到未来。
+        let next_month =
+            (month < input.today.with_day(1).unwrap_or(input.today)).then(|| shift_month(month, 1));
 
-        let mut calendar = div().flex().flex_col().gap_1().w(px(250.));
-        for row in 0..row_count {
-            let month = (0..7).find_map(|offset| {
-                let day = input.today - DateDuration::days((row * 7 + offset) as i64);
-                (day.day() == 1).then_some(day.month())
-            });
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(self.month_nav_button("month-prev", "\u{2039}", prev_month, cx))
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::BOLD)
+                    .child(format!("{}年{}月", month.year(), month.month())),
+            )
+            .child(self.month_nav_button("month-next", "\u{203a}", next_month, cx));
+
+        let mut weekday_header = div().flex().gap_1();
+        for label in ["一", "二", "三", "四", "五", "六", "日"] {
+            weekday_header = weekday_header.child(
+                div()
+                    .w(px(30.))
+                    .flex()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(rgb(palette::TEXT_MUTED))
+                    .child(label),
+            );
+        }
+
+        let mut grid = div().flex().flex_col().gap_1();
+        let total_cells = (leading + days).div_ceil(7) * 7;
+        for row in 0..total_cells / 7 {
             let mut week = div().flex().gap_1();
-            for offset in 0..7 {
-                let day = input.today - DateDuration::days((row * 7 + offset) as i64);
+            for col in 0..7 {
+                let index = row * 7 + col;
+                if index < leading || index >= leading + days {
+                    week = week.child(div().w(px(30.)).h(px(30.)));
+                    continue;
+                }
+                let day = month.with_day(index - leading + 1).unwrap_or(month);
                 let count = input.counts.count(day);
+                let level = calendar_level(count);
+                let text = match level {
+                    0 => palette::TEXT_SOFT,
+                    1..=4 => palette::CALENDAR_TEXT_DARK,
+                    _ => palette::WHITE,
+                };
                 let mut cell = div()
-                    .w(px(24.))
-                    .h(px(24.))
+                    .w(px(30.))
+                    .h(px(30.))
                     .rounded_sm()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
                     .cursor_pointer()
-                    .child("")
-                    .bg(calendar_color(count));
+                    .bg(calendar_color(count))
+                    .text_color(rgb(text))
+                    .child(format!("{}", day.day()));
                 if day == input.selected {
                     cell = cell.border_2().border_color(rgb(palette::WHITE));
                 }
@@ -77,20 +128,61 @@ impl MainWindow {
                     }),
                 ));
             }
-            let month_label = div()
-                .w(px(36.))
-                .h(px(24.))
-                .flex()
-                .items_center()
-                .text_color(rgb(palette::TEXT_MUTED))
-                .child(
-                    month
-                        .map(|month| format!("{}月", month))
-                        .unwrap_or_default(),
-                );
-            calendar = calendar.child(div().flex().items_center().child(month_label).child(week));
+            grid = grid.child(week);
         }
-        calendar.mt_4()
+
+        div()
+            .w(px(250.))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(header)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(weekday_header)
+                    .child(grid),
+            )
+            .mt_4()
+    }
+
+    /// 月份切换箭头。`target = None` 时置灰且不响应点击。
+    fn month_nav_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        target: Option<NaiveDate>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let button = div()
+            .id(id)
+            .w(px(28.))
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .text_xl()
+            .text_color(rgb(match target {
+                Some(_) => palette::TEXT_SOFT,
+                None => palette::TEXT_DISABLED,
+            }))
+            .child(label);
+        match target {
+            Some(target) => button
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(palette::ROW_HOVER)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.view_month = target;
+                        cx.notify();
+                    }),
+                ),
+            None => button,
+        }
     }
 
     /// 右侧时间轴：只渲染选中日的明细，明细本身是懒加载的结果（借用 `Arc`，不拷贝）。
@@ -229,6 +321,18 @@ impl Render for MainWindow {
     }
 }
 
+/// 月份平移：`month` 为该月 1 号，`delta` 以月为单位（可正可负）。
+fn shift_month(month: NaiveDate, delta: i32) -> NaiveDate {
+    let total = month.year() * 12 + month.month0() as i32 + delta;
+    NaiveDate::from_ymd_opt(total.div_euclid(12), total.rem_euclid(12) as u32 + 1, 1)
+        .unwrap_or(month)
+}
+
+/// 当月天数：`month` 为该月 1 号。
+fn days_in_month(month: NaiveDate) -> u32 {
+    shift_month(month, 1).signed_duration_since(month).num_days() as u32
+}
+
 /// 当前窗口的位置/尺寸/最大化状态，落盘与关闭时共用同一份采集逻辑。
 fn capture_window_state(window: &Window) -> WindowState {
     let (bounds, maximized) = match window.window_bounds() {
@@ -311,6 +415,7 @@ fn create_main_window(
                     store,
                     scheduler,
                     selected_date: today,
+                    view_month: today.with_day(1).unwrap_or(today),
                 });
                 window.on_window_should_close(cx, move |window, cx| {
                     close_settings_window(cx);

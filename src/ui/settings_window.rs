@@ -109,11 +109,30 @@ impl Render for SettingsWindow {
             .child(setting_copy("提醒间隔", "两次提醒之间的等待时间"))
             .child(interval);
 
-        let image_status = if reminder_image_file().exists() {
-            "已自定义"
-        } else {
-            "默认内置图"
-        };
+        let custom = reminder_image_file().exists();
+        let change = text_button("change-image", "更换", true).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, _, _, cx| {
+                if let Some(path) = platform::pick_image_file() {
+                    if let Ok(bytes) = fs::read(&path) {
+                        if image_format(&bytes).is_some() {
+                            let _ = fs::write(reminder_image_file(), &bytes);
+                        }
+                    }
+                }
+                cx.notify();
+            }),
+        );
+        let mut reset = text_button("reset-image", "恢复默认", custom);
+        if custom {
+            reset = reset.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, _, cx| {
+                    let _ = fs::remove_file(reminder_image_file());
+                    cx.notify();
+                }),
+            );
+        }
         let image_row = div()
             .flex()
             .items_center()
@@ -122,38 +141,7 @@ impl Render for SettingsWindow {
             .py_3()
             .rounded_md()
             .child(setting_copy("提醒图片", "提醒浮层中央的插图，可替换为本地图片"))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(palette::TEXT_MUTED))
-                            .child(image_status),
-                    )
-                    .child(text_button("change-image", "更换").on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_, _, _, cx| {
-                            if let Some(path) = platform::pick_image_file() {
-                                if let Ok(bytes) = fs::read(&path) {
-                                    if image_format(&bytes).is_some() {
-                                        let _ = fs::write(reminder_image_file(), &bytes);
-                                    }
-                                }
-                            }
-                            cx.notify();
-                        }),
-                    ))
-                    .child(text_button("reset-image", "恢复默认").on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_, _, _, cx| {
-                            let _ = fs::remove_file(reminder_image_file());
-                            cx.notify();
-                        }),
-                    )),
-            );
+            .child(div().flex().items_center().gap_2().child(change).child(reset));
 
         let title_bar = titlebar("设置", window_button("\u{e8bb}", WindowControlArea::Close));
 
@@ -230,18 +218,30 @@ fn switch(enabled: bool) -> impl IntoElement {
         )
 }
 
-fn text_button(id: &'static str, label: &'static str) -> gpui_kit::Stateful<gpui_kit::Div> {
-    div()
+fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let mut button = div()
         .id(id)
         .px_3()
         .py_1()
         .rounded_sm()
         .text_sm()
-        .text_color(rgb(palette::TEXT_BUTTON))
-        .bg(rgb(palette::STEP_BG))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(palette::STEP_BG_HOVER)))
-        .child(label)
+        .text_color(if enabled {
+            rgb(palette::TEXT_BUTTON)
+        } else {
+            rgb(palette::TEXT_DISABLED)
+        })
+        .bg(if enabled {
+            rgb(palette::STEP_BG)
+        } else {
+            rgb(palette::STEP_BG_DISABLED)
+        })
+        .child(label);
+    if enabled {
+        button = button
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(palette::STEP_BG_HOVER)));
+    }
+    button
 }
 
 fn step_button(label: &'static str, enabled: bool) -> gpui_kit::Div {

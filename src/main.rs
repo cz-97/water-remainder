@@ -32,7 +32,6 @@ fn main() {
         return;
     }
     application()
-        .with_assets(gpui_kit::assets::Assets)
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .run(|cx: &mut App| {
             // gpui-kit 的契约：开窗前初始化已启用的层。本项目 `default-features = false`，

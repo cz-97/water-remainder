@@ -42,7 +42,7 @@
 | 领域 | 选型 |
 | --- | --- |
 | 语言 | Rust 2024 edition |
-| UI 渲染 | `gpui-kit`（启用 `component` / `assets`：gpui-component 的 shadcn 风格控件 + Lucide 图标；底层 gpui / gpui_platform） |
+| UI 渲染 | `gpui-kit`（`default-features = false`，只启用 gpui / gpui_platform 两层；组件层与图标资源关闭） |
 | 托盘与菜单 | `tray-icon` / `muda` |
 | 窗口句柄 | `raw-window-handle` + `windows` crate (Win32 / DWM) |
 | 时间处理 | `chrono`（clock 特性） |
@@ -124,11 +124,11 @@
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
   - **中央插图可换**：默认用内置 `water.png`；若数据目录下存在 `reminder.img`（由设置窗「更换图片」写入）则优先用它，按文件头魔数解码（png / jpg / gif / bmp / webp / tif / ico），无法解析时回退内置图。
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
-- `ui/settings_window.rs` — 控件均来自 gpui-component：间隔步进器（`Button`，受 `INTERVALS` 边界约束，越界时置灰）+ 开机启动开关（`Switch`）+ 提醒图片「更换 / 恢复默认」（`Button`，无自定义图时「恢复默认」置灰）。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。
+- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。
 
-`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`。窗口的按钮 / 开关 / 标题栏已改用 gpui-component（`Button` / `Switch` / `TitleBar`），此前的自绘标题栏部件（`titlebar` / `titlebar_button` / `window_button`）已移除。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
-`palette` 现只服务自绘部分（日历热力图、提醒浮层遮罩与少量文字色）；其余控件颜色来自 gpui-component 的主题。浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。
+`palette` 是全部界面颜色的唯一来源。因为 `gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
 
 **5. 平台适配层（`platform/`）**
 
@@ -176,7 +176,7 @@ src/
 │   ├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
 │   └── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
 ├── ui/                      界面（GPUI View 与共享部件）
-│   ├── mod.rs               时间工具、palette 配色、热力图取色、图片格式探测
+│   ├── mod.rs               时间工具、palette 配色、标题栏与共用按钮样式
 │   ├── main_window.rs       主窗口：月历 + 时间轴
 │   ├── reminder_window.rs   全屏提醒浮层
 │   └── settings_window.rs   设置窗口
@@ -206,6 +206,5 @@ cargo build --release
 - UI 依赖只声明 `gpui-kit` 一项，不再直接依赖 Zed 主仓。`gpui-kit` 是 longbridge 基于 GPUI 的组件库，它内部依赖把 Zed 的 `gpui` 重新发布的 crates.io 快照 `gpui-pre`（本版本对应 `zed@d89e9c2`），并把 gpui 全部根命名空间重导出——`gpui_kit::*` 就是 gpui，`gpui_kit::platform` 就是 `gpui_platform`。
   - 收益：不再需要 git checkout、版本可锁定、`cargo fetch` 走镜像。
   - 代价：底层 rev 由 `gpui-kit` 决定，上游变更只能等它跟进；且 `gpui-kit` 固定为 `gpui_platform` 打开 `font-kit` / `x11` / `wayland` / `runtime_shaders`，为 `gpui-pre` 打开 `windows-manifest`，这些特性无法从本项目侧关闭。
-- 已启用 gpui-kit 的 `component`（gpui-component，shadcn 风格控件）与 `assets`（Lucide 图标）：窗口的按钮 / 开关 / 标题栏改用组件库（`Button` / `Switch` / `TitleBar`），日历热力图与时间轴仍自绘（`palette`）。
-- **依赖坑**：`gpui-component 0.6.1` 与最新的 `gpui-component-macros 0.6.6` 不兼容（`IntoPlot` 派生找不到 `plot::tooltip::track_hover`，组件自身编译失败）。`Cargo.lock` 未纳入版本控制，故 `Cargo.toml` 已把 `gpui-component-macros` 钉在 `=0.6.1`；**不要放宽这个约束**，否则会解析到 0.6.6 导致编译失败。
-- 启动时调用一次 `gpui_kit::init(cx)`（同时初始化 gpui-base 主题与组件全局态），并以 `.with_assets(gpui_kit::assets::Assets)` 挂上图标资源。
+- `default-features = false` 关掉了 gpui-kit 的 `component` 与 `assets`：界面继续完全由本项目自绘（`palette` + `ui.rs` 的标题栏部件），不引入 shadcn 主题，也不嵌入图标资源。
+- 启动时调用一次 `gpui_kit::init(cx)`（gpui-kit 的契约）。当前只启用 gpui 层，它实际只登记了 `gpui-base` 的主题与各控件全局态，本项目界面自绘、不读这些全局量。

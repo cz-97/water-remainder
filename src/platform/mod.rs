@@ -151,33 +151,55 @@ pub fn style_main_window(window: &gpui_kit::Window) {
 #[cfg(not(windows))]
 pub fn style_main_window(_: &gpui_kit::Window) {}
 
-/// 提醒浮层：铺满整屏。
+/// 提醒浮层：铺满整屏，真正无边框。
 ///
-/// 这里必须**自己**把客户区对齐到显示器矩形，不能只信 `display.bounds()`：
-/// gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666`
-/// 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带。
-/// 而浮层带 `WS_EX_TOPMOST`，缺哪条边都是直接看见桌面。
+/// 两层问题要一起解决：
+/// 1. **客户区要对齐显示器矩形** —— 只信 `display.bounds()` 不够，gpui 把逻辑像素
+///    经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666` 这类值会因
+///    浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带。
+/// 2. **关掉 DWM 的非客户区渲染** —— 不关的话，Windows 给每个顶层窗口画的那圈
+///    1px 描边 + 阴影会留在顶部，看起来就像一条白边（“像视频 / 游戏 / 浏览器
+///    那样的全屏”正是关了这两样：无边框、无阴影）。
 ///
-/// 做法是**实测差值**而不是算边框厚度：分别拿到客户区在屏幕上的四个边与显示器
-/// 矩形的四个边，按差值调整窗口位置与大小，使客户区恰好等于显示器矩形。
-///
-/// 为什么不用「测量非客户区边框厚度再加回去」：那种做法把边框厚度当常数，
-/// 一旦它变化（换显示器、改缩放、或系统主题改变描边），多算/少算的量就会
-/// 全部堆到某一条边上，窄缝就会跑到顶部或左侧。差值修正是**自纠正**的 ——
-/// 不管缝隙原本出现在哪条边、也不管边框变成多厚，都会被拉回 0。
+/// 客户区对齐用**实测差值**：分别拿客户区在屏幕上的四边与显示器矩形的四边，
+/// 按差值调整位置与大小，使客户区恰好等于显示器矩形。全程物理像素，不经
+/// 逻辑像素换算（5px 正是往返换算截断造成的）。
 ///
 /// 这个函数是幂等的：已对齐时四个差值全为 0，直接返回。因此可以在窗口
 /// 每次移动 / 改变尺寸时重跑（见 `refit_reminder_window`），不会因为
 /// `SetWindowPos` 触发 `WM_MOVE` 而递归。
 #[cfg(windows)]
 pub fn style_reminder_window(window: &gpui_kit::Window) {
-    use windows::Win32::Graphics::Dwm::DWMWCP_DONOTROUND;
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY, DWMWCP_DONOTROUND,
+        DWMNCRP_DISABLED, DwmSetWindowAttribute,
+    };
 
     let Some(hwnd) = hwnd(window) else {
         return;
     };
     // 圆角要先关掉：铺满整屏时圆角会露出下层桌面。
     set_window_chrome(hwnd, DWMWCP_DONOTROUND);
+
+    unsafe {
+        // 关掉 DWM 的非客户区渲染：去掉窗口四周的阴影与描边。
+        let policy = DWMNCRP_DISABLED;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &policy as *const _ as *const _,
+            std::mem::size_of_val(&policy) as u32,
+        );
+        // 再把那条 1px 描边颜色设成「无」：不设的话它默认是一条浅色线。
+        let border_color = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color as *const _ as *const _,
+            std::mem::size_of_val(&border_color) as u32,
+        );
+    }
+
     fit_client_to_monitor(hwnd);
 }
 

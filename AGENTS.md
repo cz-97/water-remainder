@@ -145,7 +145,9 @@
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
 - 对外接口一律接收 `&gpui_kit::Window`（只有 `show_main_window` 需要 `&mut`，以便在显示前置脏），原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
-- `style_main_window` / `style_reminder_window` — 两者都经 `set_window_chrome` 设置 DWM 圆角（主窗圆角、浮层直角）。**`style_reminder_window` 还负责把浮层铺满整屏**：只信 `display.bounds()` 不够，gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666` 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带；而浮层带 `WS_EX_TOPMOST`，缺哪条边都是直接看见桌面。`fit_client_to_monitor` 的做法是**实测差值**而非算边框厚度：分别拿到客户区在屏幕上的四边与显示器矩形的四边，按差值调整位置与大小，使**客户区**（真正被绘制的那块）恰好等于显示器矩形。这样不依赖「边框厚度是常数」这个假设 —— 缝隙出现在哪条边、边框变成多厚，都会被拉回 0。全程物理像素，不经逻辑像素换算（5px 正是往返换算截断造成的）
+- `style_main_window` / `style_reminder_window` — 两者都经 `set_window_chrome` 设置 DWM 圆角（主窗圆角、浮层直角）。**`style_reminder_window` 还负责把浮层做成真正无边框的全屏**，两件事一起做：
+  - **关掉 DWM 非客户区渲染**：`DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED` 去掉四周阴影，`DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE` 去掉那条 1px 描边。不关的话 Windows 给每个顶层窗口画的那圈描边+阴影会留在顶部，看起来像一条白边 —— 「像视频/游戏/浏览器那样的全屏」正是无边框、无阴影。
+  - **把客户区对齐显示器矩形**：只信 `display.bounds()` 不够，gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666` 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带；而浮层带 `WS_EX_TOPMOST`，缺哪条边都是直接看见桌面。`fit_client_to_monitor` 用**实测差值**而非算边框厚度：分别拿客户区在屏幕上的四边与显示器矩形的四边，按差值调整位置与大小，使**客户区**（真正被绘制的那块）恰好等于显示器矩形。不依赖「边框厚度是常数」这个假设 —— 缝隙出现在哪条边、边框变成多厚，都会被拉回 0。全程物理像素，不经逻辑像素换算（5px 正是往返换算截断造成的）
 - 浮层开着时用户可能改分辨率、拔接显示器，因此浮层 View 上还挂了 `observe_window_bounds` → `refit_reminder_window` 重新对齐。`fit_client_to_monitor` 是**幂等**的（已对齐时四个差值全为 0 直接返回），所以它自己触发的 `WM_MOVE` 再回调一次也不会递归
 - 取不到显示器矩形或客户区矩形时整个跳过，绝不猜一个位置把窗口甩出屏幕
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题

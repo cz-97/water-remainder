@@ -117,15 +117,16 @@ fn hwnd(window: &gpui_kit::Window) -> Option<windows::Win32::Foundation::HWND> {
     }
 }
 
-/// 设置 DWM 圆角偏好并去掉描边。主窗与浮层只差圆角常量，共用这一处调用。
+/// 设置 DWM 圆角偏好。主窗与浮层只差圆角常量，共用这一处调用。
+///
+/// 不再去除系统描边：去掉后窗口失去标准边框/阴影，圆角观感会与其它应用不一致；
+/// 保留系统描边可让主窗与 Windows 上的普通窗口保持一致。
 #[cfg(windows)]
 fn set_window_chrome(
     hwnd: windows::Win32::Foundation::HWND,
     corner: windows::Win32::Graphics::Dwm::DWM_WINDOW_CORNER_PREFERENCE,
 ) {
-    use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute,
-    };
+    use windows::Win32::Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DwmSetWindowAttribute};
 
     unsafe {
         let _ = DwmSetWindowAttribute(
@@ -133,13 +134,6 @@ fn set_window_chrome(
             DWMWA_WINDOW_CORNER_PREFERENCE,
             &corner as *const _ as *const _,
             std::mem::size_of_val(&corner) as u32,
-        );
-        let border = DWMWA_COLOR_NONE;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_BORDER_COLOR,
-            &border as *const _ as *const _,
-            std::mem::size_of_val(&border) as u32,
         );
     }
 }

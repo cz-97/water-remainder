@@ -1,4 +1,4 @@
-use crate::paths::app_dir;
+use crate::core::paths::app_dir;
 use crate::ui::{day_bounds, local_date, now};
 use chrono::NaiveDate;
 use r2d2::{Pool, PooledConnection};

@@ -1,4 +1,4 @@
-use crate::{config::load_store, data::get_elapsed};
+use crate::core::{config::load_store, data::get_elapsed};
 use std::{
     sync::mpsc,
     thread,

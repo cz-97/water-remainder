@@ -1,11 +1,13 @@
 use crate::{
-    config::{Store, WindowState, save_store},
-    data::{DayCounts, day_counts, day_detail},
-    scheduler::SchedulerCmd,
-    settings_window::{close_settings_window, open_settings_window},
+    core::{
+        config::{Store, WindowState, save_store},
+        data::{DayCounts, day_counts, day_detail},
+        scheduler::SchedulerCmd,
+    },
     ui::{
         ACTION_ICON_SIZE, calendar_color, format_clock, format_date, local_date, now, palette,
-        relative_to_now, titlebar, titlebar_button, window_button,
+        relative_to_now, settings_window::{close_settings_window, open_settings_window},
+        titlebar, titlebar_button, window_button,
     },
 };
 use chrono::{Datelike, Duration as DateDuration, Local, NaiveDate};

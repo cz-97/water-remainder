@@ -1,28 +1,21 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-mod config;
-mod data;
-mod main_window;
-mod paths;
+mod core;
 mod platform;
-mod reminder_window;
-mod scheduler;
-mod settings_window;
-mod tray;
 mod ui;
 
-use config::load_store;
+use core::config::load_store;
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
 use gpui_kit::App;
 use gpui_kit::platform::application;
-use main_window::open_main_window;
-use reminder_window::open_reminder_window;
-use scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
+use core::scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
+use platform::tray::setup_tray;
 use std::sync::{Arc, Mutex, mpsc};
-use tray::setup_tray;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+use ui::main_window::open_main_window;
+use ui::reminder_window::open_reminder_window;
 
 enum AppEvent {
     Tray(TrayIconEvent),
@@ -105,7 +98,7 @@ fn main() {
                             } else if event.id == quit_id {
                                 let _ = scheduler_tx.send(SchedulerCmd::Stop);
                                 cx.update(|cx| {
-                                    main_window::save_main_window_state(cx);
+                                    ui::main_window::save_main_window_state(cx);
                                     cx.quit();
                                 });
                                 return;

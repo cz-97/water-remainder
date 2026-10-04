@@ -1,3 +1,5 @@
+pub mod tray;
+
 #[cfg(windows)]
 pub fn enable_system_menu_theme() {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};

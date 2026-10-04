@@ -1,4 +1,4 @@
-use crate::paths::app_dir;
+use crate::core::paths::app_dir;
 use std::{
     fs,
     path::PathBuf,

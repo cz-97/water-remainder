@@ -1,3 +1,7 @@
+pub mod main_window;
+pub mod reminder_window;
+pub mod settings_window;
+
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use gpui_kit::{Div, FontWeight, Stateful, WindowControlArea, div, prelude::*, px, rgb};
 use std::time::{SystemTime, UNIX_EPOCH};

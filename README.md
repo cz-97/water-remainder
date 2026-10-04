@@ -63,14 +63,16 @@
                        │ main_window   记录日历 + 时间轴 │
                        │ reminder_window 全屏提醒浮层   │
                        │ settings_window 设置面板       │
-                       │ ui.rs 时间/配色/窗口按钮工具    │
+                       │ ui/ 时间/配色/窗口按钮工具     │
                        └──────────────┬───────────────┘
                                       ▼
                        ┌──────────────────────────────┐
-                       │ platform.rs（Win32 / DWM）     │
+                       │ platform/（Win32 / DWM）       │
                        │ 圆角·边框·暗色菜单·自启·单实例 │
                        └──────────────────────────────┘
 ```
+
+> 分类后源码按职责归入 `core/`（配置、存储、调度等逻辑）、`ui/`（窗口与共享部件）、`platform/`（系统适配）三个目录，图中为模块名，完整路径见「源码结构」。
 
 ### 分层说明
 
@@ -88,7 +90,7 @@
 
 这里还订阅了一次系统唤醒（`cx.on_system_wake`）：唤醒后向调度器发 `Reschedule(Wake)`，把 deadline 按「距上次喝水已过去多久」重算一次。**这个 `Subscription` 必须 `detach()`**——`Platform::run` 是先调用启动闭包、之后才进入 `GetMessageW` 消息循环（`gpui-pre-windows/src/platform.rs:508`），绑在闭包里的 RAII 守卫会在消息循环开始之前就被 drop 掉并注销回调，回调于是永远不会被调用。同一处的 `std::mem::forget(tray)` 处理的是同一个「闭包提前返回」问题。
 
-**2. 调度层（`scheduler.rs`）**
+**2. 调度层（`core/scheduler.rs`）**
 
 一个专用的 OS 线程，持有 `std::sync::mpsc` 双向通道：
 
@@ -105,10 +107,10 @@
 
 拆成两个互不干扰的持久化通道：
 
-- `config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。
-- `data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。内存在进程内分两层：**天级聚合 `DayCounts`（`BTreeMap<NaiveDate, DayStat{count, last}>`，规模只与「有记录的天数」成正比）** 与 **明细 `DETAILS`（`BTreeMap<NaiveDate, Arc<Vec<u64>>>`，点开某天才查一次）**。`save_time()` 落库成功后只增量更新这两层。提醒文案与调度需要的「上次喝水距今」由 `get_elapsed()` 从聚合层取（`last_time()` = 最后一个分组的 `MAX(timestamp)`），**完全不需要明细**。
+- `core/config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。
+- `core/data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。内存在进程内分两层：**天级聚合 `DayCounts`（`BTreeMap<NaiveDate, DayStat{count, last}>`，规模只与「有记录的天数」成正比）** 与 **明细 `DETAILS`（`BTreeMap<NaiveDate, Arc<Vec<u64>>>`，点开某天才查一次）**。`save_time()` 落库成功后只增量更新这两层。提醒文案与调度需要的「上次喝水距今」由 `get_elapsed()` 从聚合层取（`last_time()` = 最后一个分组的 `MAX(timestamp)`），**完全不需要明细**。
 
-**记录缓存的生命周期（`data.rs`）**
+**记录缓存的生命周期（`core/data.rs`）**
 
 `COUNTS`（天级聚合）与 `DETAILS`（明细，按需）是记录的唯一来源，`LAST_TIME` 之类的旁路缓存已移除。进程运行期间与数据库只有三类交互：
 
@@ -130,23 +132,23 @@
 
 三个独立的 GPUI 窗口，各自是实现了 `Render` 的 View：
 
-- `main_window.rs` — 记录总览。日历按「今天向前倒推」逐行生成（每行 7 天，行内首次遇到 `day == 1` 时标注月份），配色由 `ui::calendar_color()` 按当日次数映射到蓝色梯度，形成 GitHub 贡献图式热力图；右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
+- `ui/main_window.rs` — 记录总览。日历按「今天向前倒推」逐行生成（每行 7 天，行内首次遇到 `day == 1` 时标注月份），配色由 `ui::calendar_color()` 按当日次数映射到蓝色梯度，形成 GitHub 贡献图式热力图；右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
   - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` 三个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `counts.count(day)`（返回 `usize`）上色；右侧明细先经 `day_detail(selected)` 取到（懒加载 + 缓存），再按 `Arc` 借用渲染；点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
   - `render()` 只做三件事：组装一次性的 `RenderInput`（`today` / `selected` / 天级聚合 / 选中日明细）、调用三个子视图、拼外壳。时刻与记录因此是**显式传参**，`calendar()` / `timeline()` / `title_actions()` 不会各自去读全局状态。三个子视图的返回类型写成具体的 `Div` 而非 `impl IntoElement`，否则返回值会隐式借用 `&mut Context`，同一个 `render` 里就没法把 `cx` 依次交给多个子视图。
   - 关闭按钮**不销毁窗口**：`on_window_should_close` 采集并落盘窗口状态后调 `platform::hide_main_window()`，返回 `false` 让 gpui 吞掉 `WM_CLOSE`（不再交给 `DefWindowProc` 销毁）。隐藏期间窗口收不到 `WM_PAINT`，也没有任何路径会 `notify` 它——**记录入库只写缓存、不通知主窗**，所以日历的刷新完全依赖 `show_main_window` 里那次置脏：唤回时重绘一帧，重新取聚合与选中日明细（都命中缓存）+ `local_date(now())`。
-- `reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
+- `ui/reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
   - **两处倒计时按秒跳动**。实体创建时 `cx.spawn` 起一个 1 秒周期的后台定时任务，每轮醒来 `cx.notify()` 触发重绘（`notify` → `invalidate_view` 置窗口 dirty 并唤醒平台 waker → 下一帧重跑 `render`）。窗口关闭后弱引用升级失败，任务自行退出，不会泄漏。
   - 文案形如 `您在 1 天 2 小时 15 分 30 秒前喝过水（昨天 15:04:32），将于 12 分 3 秒后再次提醒您（15:37:11）`。时间一律写到秒，并用「从最大非零单位一路展开到秒」的写法，避免出现「1 小时 59 秒」这种有歧义的省略。
   - 括号内是具体时刻 `HH:MM:SS`；日期用相对词表示——当天省略、`昨天`、`前天`、`N 天前`。下次提醒的时刻始终不写日期。
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
-- `settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。两处修改都走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里，窗口侧只描述「改什么」，不出现 `lock` + `save_store` 的成对代码。间隔变更随后向调度器发送 `ChangeInterval`。
+- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关。两处修改都走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里，窗口侧只描述「改什么」，不出现 `lock` + `save_store` 的成对代码。间隔变更随后向调度器发送 `ChangeInterval`。
 
-`ui.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
 `palette` 是全部界面颜色的唯一来源。因为 `gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
 
-**5. 平台适配层（`platform.rs`）**
+**5. 平台适配层（`platform/`）**
 
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
@@ -164,9 +166,9 @@
 调度线程 deadline 到期
       └─> event_tx.send(SchedulerEvent::Remind { remaining })
             └─> 转发线程 → AppEvent::Alarm → GPUI 主线程 match
-                  └─> reminder_window::open_reminder_window()
+                  └─> ui::reminder_window::open_reminder_window()
                         用户点「喝了」
-                          ├─> data::save_time()            写 SQLite + 增量入当天桶
+                          ├─> core::data::save_time()            写 SQLite + 增量入当天桶
                           ├─> scheduler_tx.send(SchedulerCmd::Reschedule(Drink))  deadline = now + interval
                           └─> window.remove_window()       关闭浮层
 ```
@@ -201,18 +203,21 @@ cargo build --release
 
 ```
 src/
-├── main.rs              入口、单实例、事件汇聚循环
-├── config.rs            设置模型与 settings.txt 读写、间隔常量表
-├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
-├── data.rs              SQLite 连接池、天级聚合缓存 + 按需明细、记录读写
-├── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
-├── tray.rs              托盘图标与右键菜单
-├── ui.rs                时间工具、palette 配色、标题栏与共用按钮样式
-├── main_window.rs       主窗口：日历热力图 + 时间轴
-├── reminder_window.rs   全屏提醒浮层
-├── settings_window.rs   设置窗口
-├── platform.rs          Win32 / DWM 适配
-└── assets/              water.ico / water.png
+├── main.rs                  入口、单实例、事件汇聚循环
+├── core/                    领域逻辑（配置、存储、调度，无 UI 依赖）
+│   ├── config.rs            设置模型与 settings.txt 读写、间隔常量表
+│   ├── data.rs              SQLite 连接池、天级聚合缓存 + 按需明细、记录读写
+│   ├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
+│   └── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
+├── ui/                      界面（GPUI View 与共享部件）
+│   ├── mod.rs               时间工具、palette 配色、标题栏与共用按钮样式
+│   ├── main_window.rs       主窗口：日历热力图 + 时间轴
+│   ├── reminder_window.rs   全屏提醒浮层
+│   └── settings_window.rs   设置窗口
+├── platform/                系统适配
+│   ├── mod.rs               Win32 / DWM 适配
+│   └── tray.rs              托盘图标与右键菜单
+└── assets/                  water.ico / water.png
 ```
 
 ## 说明

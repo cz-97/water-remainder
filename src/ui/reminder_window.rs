@@ -1,6 +1,8 @@
 use crate::{
-    data::{last_time, save_time},
-    scheduler::{RescheduleType, SchedulerCmd},
+    core::{
+        data::{last_time, save_time},
+        scheduler::{RescheduleType, SchedulerCmd},
+    },
     ui::{format_clock_secs, format_day_label, format_span, local_date, now, palette},
 };
 use gpui_kit::{
@@ -103,7 +105,7 @@ impl Render for ReminderWindow {
             .child(
                 img(std::sync::Arc::new(Image::from_bytes(
                     ImageFormat::Png,
-                    include_bytes!("assets/water.png").to_vec(),
+                    include_bytes!("../assets/water.png").to_vec(),
                 )))
                 .size_128(),
             )

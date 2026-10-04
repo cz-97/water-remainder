@@ -1,7 +1,9 @@
 use crate::{
-    config::{INTERVALS, Store, update_settings},
+    core::{
+        config::{INTERVALS, Store, update_settings},
+        scheduler::{RescheduleType, SchedulerCmd},
+    },
     platform,
-    scheduler::{RescheduleType, SchedulerCmd},
     ui::{palette, titlebar, window_button},
 };
 use gpui_kit::{

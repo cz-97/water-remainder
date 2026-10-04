@@ -9,3 +9,9 @@ pub fn app_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("water-remainder")
 }
+
+/// 自定义提醒图片的落盘位置：数据目录下的固定文件。存在即代表「已自定义」，
+/// 因此不需要在设置里记录任何路径。
+pub fn reminder_image_file() -> PathBuf {
+    app_dir().join("reminder.img")
+}

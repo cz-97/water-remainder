@@ -1,22 +1,24 @@
 use crate::{
     core::{
-        config::Store,
         data::{last_time, save_time},
+        paths::reminder_image_file,
         scheduler::{RescheduleType, SchedulerCmd},
     },
-    ui::{format_clock_secs, format_day_label, format_span, local_date, now, palette},
+    ui::{format_clock_secs, format_day_label, format_span, image_format, local_date, now, palette},
 };
 use gpui_kit::{
     App, Context, FontWeight, Image, ImageFormat, MouseButton, Rems, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
 };
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, mpsc},
     time::Duration,
 };
+
 pub struct ReminderWindow {
-    store: Arc<Mutex<Store>>,
     scheduler: mpsc::Sender<SchedulerCmd>,
+    /// 浮层中央的插图：自选图片或内置图，开窗时解析一次。
+    image: Arc<Image>,
     /// 最近一次喝水的时间戳（Unix 秒）。
     last_drink: Option<u64>,
     /// 下一次提醒的时刻（Unix 秒）。
@@ -84,7 +86,7 @@ impl Render for ReminderWindow {
                 MouseButton::Left,
                 cx.listener(|_, _, w, _| w.remove_window()),
             );
-        let mut overlay = div()
+        div()
             .flex()
             .flex_col()
             .size_full()
@@ -106,30 +108,27 @@ impl Render for ReminderWindow {
                     .text_color(rgb(palette::TEXT_SOFT))
                     .text_size(Rems(1.05))
                     .child(status),
-            );
-        if self
-            .store
-            .lock()
-            .map(|store| store.settings.show_image)
-            .unwrap_or(true)
-        {
-            overlay = overlay.child(
-                img(std::sync::Arc::new(Image::from_bytes(
-                    ImageFormat::Png,
-                    include_bytes!("../assets/water.png").to_vec(),
-                )))
-                .size_128(),
-            );
-        }
-        overlay.child(div().flex().gap_12().mt_4().child(drink).child(skip))
+            )
+            .child(img(self.image.clone()).size_128())
+            .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-pub fn open_reminder_window(
-    cx: &mut App,
-    tx: mpsc::Sender<SchedulerCmd>,
-    store: Arc<Mutex<Store>>,
-    remaining: u64,
-) {
+
+/// 浮层插图：数据目录下的 `reminder.img` 存在且可解析时优先使用，否则用内置 `water.png`。
+fn reminder_image() -> Arc<Image> {
+    let custom = std::fs::read(reminder_image_file())
+        .ok()
+        .and_then(|bytes| image_format(&bytes).map(|format| (format, bytes)));
+    match custom {
+        Some((format, bytes)) => Arc::new(Image::from_bytes(format, bytes)),
+        None => Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../assets/water.png").to_vec(),
+        )),
+    }
+}
+
+pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remaining: u64) {
     let last_drink = last_time();
     let next_reminder = now() + remaining;
 
@@ -156,6 +155,7 @@ pub fn open_reminder_window(
         None => return,
     };
     let bounds = display.bounds();
+    let image = reminder_image();
     let handle = cx
         .open_window(
             WindowOptions {
@@ -183,8 +183,8 @@ pub fn open_reminder_window(
                     .detach();
 
                     ReminderWindow {
-                        store,
                         scheduler: tx,
+                        image,
                         last_drink,
                         next_reminder,
                     }

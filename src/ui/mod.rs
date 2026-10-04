@@ -3,7 +3,7 @@ pub mod reminder_window;
 pub mod settings_window;
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
-use gpui_kit::{Div, FontWeight, Stateful, WindowControlArea, div, prelude::*, px, rgb};
+use gpui_kit::{Div, FontWeight, ImageFormat, Stateful, WindowControlArea, div, prelude::*, px, rgb};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 界面配色唯一来源。`gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，
@@ -136,6 +136,28 @@ pub fn calendar_level(count: usize) -> usize {
 /// 次数 → 热力图取色，等级由 `calendar_level` 给出。
 pub fn calendar_color(count: usize) -> gpui_kit::Rgba {
     rgb(palette::CALENDAR[calendar_level(count)])
+}
+
+/// 按文件头魔数判断图片格式，供自选提醒图片解码（不信任文件扩展名）。
+pub fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    let starts = |signature: &[u8]| bytes.starts_with(signature);
+    if starts(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some(ImageFormat::Png)
+    } else if starts(&[0xff, 0xd8, 0xff]) {
+        Some(ImageFormat::Jpeg)
+    } else if starts(b"GIF87a") || starts(b"GIF89a") {
+        Some(ImageFormat::Gif)
+    } else if starts(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else if starts(b"RIFF") && bytes.get(8..12) == Some(&b"WEBP"[..]) {
+        Some(ImageFormat::Webp)
+    } else if starts(&[0x49, 0x49, 0x2a, 0x00]) || starts(&[0x4d, 0x4d, 0x00, 0x2a]) {
+        Some(ImageFormat::Tiff)
+    } else if starts(&[0x00, 0x00, 0x01, 0x00]) {
+        Some(ImageFormat::Ico)
+    } else {
+        None
+    }
 }
 
 /// 自绘标题栏高度。栏内按钮与它同高，所以两者共用一个常量。

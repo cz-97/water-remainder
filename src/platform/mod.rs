@@ -219,3 +219,39 @@ pub fn hide_main_window(window: &gpui_kit::Window) {
 
 #[cfg(not(windows))]
 pub fn hide_main_window(_: &gpui_kit::Window) {}
+
+/// 弹出系统「打开文件」对话框，让用户选一张图片；取消时返回 `None`。
+#[cfg(windows)]
+pub fn pick_image_file() -> Option<std::path::PathBuf> {
+    use windows::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+    use windows::core::{PCWSTR, PWSTR};
+
+    // 过滤器是「说明\0通配符\0」序列，末尾再加一个 \0 收尾。
+    let filter: Vec<u16> = "图片 (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp;*.tif;*.tiff;*.ico)\0*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp;*.tif;*.tiff;*.ico\0所有文件 (*.*)\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+    let mut buffer = vec![0u16; 260];
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(buffer.as_mut_ptr()),
+        nMaxFile: buffer.len() as u32,
+        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+        ..Default::default()
+    };
+    let chosen = unsafe { GetOpenFileNameW(&mut ofn).as_bool() };
+    if !chosen {
+        return None;
+    }
+    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    Some(std::path::PathBuf::from(String::from_utf16_lossy(
+        &buffer[..len],
+    )))
+}
+
+#[cfg(not(windows))]
+pub fn pick_image_file() -> Option<std::path::PathBuf> {
+    None
+}

@@ -10,7 +10,7 @@
 - **智能顺延** — 提醒时间基于**最近一次喝水记录**计算；休眠唤醒后自动重新计算，不会因为合盖而漏提醒
 - **喝水记录** — 每次打卡写入本地 SQLite，主窗口以月历热力图 + 当日时间轴展示
 - **间隔可调** — 15 ~ 75 分钟，步进式调节（默认 45 分钟）
-- **提醒图片可关** — 提醒浮层中央的喝水插图可在设置中开关（默认显示）
+- **提醒图片可换** — 提醒浮层中央的喝水插图可在设置里替换为本地图片（默认用内置图）
 - **开机启动** — 写入 `HKCU\...\CurrentVersion\Run` 注册表项
 - **单实例运行** — 基于命名互斥体，重复启动直接退出
 - **窗口状态记忆** — 主窗口位置、尺寸、最大化状态持久化
@@ -143,11 +143,11 @@
   - 文案形如 `您在 1 天 2 小时 15 分 30 秒前喝过水（昨天 15:04:32），将于 12 分 3 秒后再次提醒您（15:37:11）`。时间一律写到秒，并用「从最大非零单位一路展开到秒」的写法，避免出现「1 小时 59 秒」这种有歧义的省略。
   - 括号内是具体时刻 `HH:MM:SS`；日期用相对词表示——当天省略、`昨天`、`前天`、`N 天前`。下次提醒的时刻始终不写日期。
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
-  - **中央插图可关**：是否渲染 `water.png` 由设置项 `show_image` 决定（关闭只跳过渲染，资源仍随 `include_bytes!` 嵌入 exe）。
+  - **中央插图可换**：默认用内置 `water.png`；若数据目录下存在 `reminder.img`（由设置窗「更换图片」写入）则优先用它，按文件头魔数解码（png / jpg / gif / bmp / webp / tif / ico），无法解析时回退内置图。
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
-- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片开关。三处修改都走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里，窗口侧只描述「改什么」，不出现 `lock` + `save_store` 的成对代码。间隔变更随后向调度器发送 `ChangeInterval`。
+- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。
 
-`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
 `palette` 是全部界面颜色的唯一来源。因为 `gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
 
@@ -184,6 +184,7 @@
 | --- | --- |
 | 设置、窗口状态 | `%APPDATA%\water-remainder\settings.txt` |
 | 喝水记录 | `%APPDATA%\water-remainder\data.db`（含 `-wal` / `-shm`） |
+| 自定义提醒图片 | `%APPDATA%\water-remainder\reminder.img`（存在即启用，删除即恢复内置图） |
 | 开机启动项 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WaterRemainder` |
 
 ---

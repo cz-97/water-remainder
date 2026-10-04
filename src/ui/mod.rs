@@ -6,6 +6,44 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use gpui_kit::{Div, FontWeight, ImageFormat, Stateful, WindowControlArea, div, prelude::*, px, rgb};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 把 gpui-component 的主题映射到本项目原来的配色，并让强调色（primary/accent）
+/// 跟随 Windows 主题色（读不到时回退到 `palette::ACCENT`）。
+pub fn apply_theme(cx: &mut gpui_kit::App) {
+    use gpui_kit::Hsla;
+    use gpui_kit::component::{Theme, ThemeMode};
+
+    Theme::change(ThemeMode::Dark, None, cx);
+    let accent = crate::platform::accent_color().unwrap_or(palette::ACCENT);
+    let color = |value: u32| Hsla::from(rgb(value));
+
+    let colors = &mut Theme::global_mut(cx).colors;
+    colors.primary = color(accent);
+    colors.primary_hover = color(accent);
+    colors.primary_active = color(accent);
+    colors.primary_foreground = color(palette::WHITE);
+    colors.accent = color(accent);
+    colors.accent_foreground = color(palette::WHITE);
+    colors.ring = color(accent);
+    colors.background = color(palette::WINDOW_BG);
+    colors.foreground = color(palette::TEXT);
+    colors.border = color(palette::BORDER);
+    colors.input = color(palette::BORDER);
+    colors.muted = color(palette::STEP_BG);
+    colors.muted_foreground = color(palette::TEXT_MUTED);
+    colors.secondary = color(palette::ROW_HOVER);
+    colors.secondary_hover = color(palette::ROW_HOVER);
+    colors.secondary_active = color(palette::STEP_BG);
+    colors.secondary_foreground = color(palette::TEXT);
+    colors.danger = color(palette::CLOSE_HOVER);
+    colors.danger_hover = color(palette::CLOSE_HOVER);
+    colors.danger_active = color(palette::CLOSE_HOVER);
+    colors.danger_foreground = color(palette::WHITE);
+    colors.switch = color(palette::SWITCH_OFF);
+    colors.switch_thumb = color(palette::WHITE);
+    colors.title_bar = color(palette::TITLEBAR_BG);
+    colors.title_bar_border = color(palette::TITLEBAR_BG);
+}
+
 /// 界面配色唯一来源。`gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，
 /// 因此这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`。
 pub mod palette {
@@ -22,17 +60,13 @@ pub mod palette {
     pub const TEXT: u32 = 0xe5e7eb;
     pub const TEXT_MUTED: u32 = 0x94a3b8;
     pub const TEXT_SOFT: u32 = 0xcbd5e1;
-    pub const TEXT_BUTTON: u32 = 0xe2e8f0;
     pub const TEXT_DISABLED: u32 = 0x64748b;
 
     // 交互
     pub const ACCENT: u32 = 0x60a5fa;
-    pub const ACCENT_HOVER: u32 = 0x3b82f6;
     pub const BORDER: u32 = 0x64748b;
     pub const SWITCH_OFF: u32 = 0x475569;
     pub const STEP_BG: u32 = 0x334155;
-    pub const STEP_BG_HOVER: u32 = 0x475569;
-    pub const STEP_BG_DISABLED: u32 = 0x252b33;
 
     /// 日历热力图色阶，索引即等级（0 = 无记录），由浅到深。
     pub const CALENDAR: [u32; 9] = [

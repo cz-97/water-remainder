@@ -6,9 +6,13 @@ use crate::{
     },
     ui::{format_clock_secs, format_day_label, format_span, image_format, local_date, now, palette},
 };
+use gpui_kit::component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::{
-    App, Context, FontWeight, Image, ImageFormat, MouseButton, Rems, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
+    App, Context, FontWeight, Image, ImageFormat, Rems, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
 };
 use std::{
     sync::{Arc, mpsc},
@@ -51,41 +55,23 @@ impl ReminderWindow {
 }
 
 impl Render for ReminderWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let tx = self.scheduler.clone();
         let status = self.status_text();
-        let drink = div()
-            .px_10()
-            .py_4()
-            .rounded_md()
-            .bg(rgb(palette::ACCENT))
-            .hover(|s| s.bg(rgb(palette::ACCENT_HOVER)))
-            .cursor_pointer()
-            .text_color(rgb(palette::WHITE))
-            .text_3xl()
-            .child("喝了")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_, _, w, _| {
-                    save_time();
-                    let _ = tx.send(SchedulerCmd::Reschedule(RescheduleType::Drink));
-                    w.remove_window();
-                }),
-            );
-        let skip = div()
-            .px_10()
-            .py_4()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette::BORDER))
-            .cursor_pointer()
-            .text_color(rgb(palette::TEXT_BUTTON))
-            .text_3xl()
-            .child("跳过")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _, w, _| w.remove_window()),
-            );
+        let drink = Button::new("drink")
+            .label("喝了")
+            .primary()
+            .large()
+            .on_click(move |_, window, _| {
+                save_time();
+                let _ = tx.send(SchedulerCmd::Reschedule(RescheduleType::Drink));
+                window.remove_window();
+            });
+        let skip = Button::new("skip")
+            .label("跳过")
+            .outline()
+            .large()
+            .on_click(|_, window, _| window.remove_window());
         div()
             .flex()
             .flex_col()

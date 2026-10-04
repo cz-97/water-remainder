@@ -32,11 +32,12 @@ fn main() {
         return;
     }
     application()
+        .with_assets(gpui_kit::assets::Assets)
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .run(|cx: &mut App| {
-            // gpui-kit 的契约：开窗前初始化已启用的层。本项目 `default-features = false`，
-            // 只启用 gpui 层，所以这里只登记了 gpui-base 的主题与控件全局态，界面自绘不读它。
+            // 初始化 gpui-kit 已启用的层（组件与图标），并把组件主题映射到本项目的配色。
             gpui_kit::init(cx);
+            ui::apply_theme(cx);
             let store = Arc::new(Mutex::new(load_store()));
             let settings = store.lock().unwrap().settings.clone();
             platform::enable_system_menu_theme();

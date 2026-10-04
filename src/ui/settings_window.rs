@@ -45,7 +45,7 @@ impl Render for SettingsWindow {
             .px_4()
             .py_3()
             .rounded_md()
-            .hover(|s| s.bg(rgb(palette::ROW_HOVER)))
+            .hover(|s| s.bg(rgb(palette::current().row_hover)))
             .cursor_pointer()
             .child(setting_copy("开机启动", "登录 Windows 后自动启动喝水提醒"))
             .child(switch(settings.autostart))
@@ -94,7 +94,7 @@ impl Render for SettingsWindow {
                 div()
                     .w(px(86.))
                     .text_center()
-                    .text_color(rgb(palette::TEXT))
+                    .text_color(rgb(palette::current().text))
                     .child(format!("{} 分钟", settings.interval_secs / 60)),
             )
             .child(increase);
@@ -105,7 +105,7 @@ impl Render for SettingsWindow {
             .px_4()
             .py_3()
             .rounded_md()
-            .hover(|s| s.bg(rgb(palette::ROW_HOVER)))
+            .hover(|s| s.bg(rgb(palette::current().row_hover)))
             .child(setting_copy("提醒间隔", "两次提醒之间的等待时间"))
             .child(interval);
 
@@ -149,20 +149,24 @@ impl Render for SettingsWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(palette::WINDOW_BG))
-            .text_color(rgb(palette::TEXT))
+            .bg(rgb(palette::current().window_bg))
+            .text_color(rgb(palette::current().text))
             .child(title_bar)
             .child(
                 div()
+                    .id("settings-body")
                     .flex_1()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .p_5()
+                    // 窗口不可缩放，内容必须自己装得下：`overflow_y_scroll`
+                    // 避免以后再加一行设置时把底部条目裁掉（且没有滚动条可滚）。
+                    .overflow_y_scroll()
                     .child(
                         div()
                             .text_sm()
-                            .text_color(rgb(palette::TEXT_MUTED))
+                            .text_color(rgb(palette::current().text_muted))
                             .mb_2()
                             .child("提醒"),
                     )
@@ -172,11 +176,25 @@ impl Render for SettingsWindow {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(rgb(palette::TEXT_MUTED))
+                            .text_color(rgb(palette::current().text_muted))
                             .mb_2()
                             .child("启动"),
                     )
-                    .child(autostart),
+                    .child(autostart)
+                    .child(div().h(px(12.)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(palette::current().text_muted))
+                            .mb_2()
+                            .child("外观"),
+                    )
+                    // 主题直接跟随系统深浅，没有开关：这里只告诉用户当前生效的是哪一种，
+                    // 以及去哪里改。否则“界面没变”看起来像 bug。
+                    .child(setting_copy(
+                        "主题",
+                        "跟随系统的应用颜色设置，无需手动切换",
+                    )),
             )
     }
 }
@@ -186,11 +204,11 @@ fn setting_copy(title: &'static str, description: &'static str) -> impl IntoElem
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_color(rgb(palette::TEXT)).child(title))
+        .child(div().text_color(rgb(palette::current().text)).child(title))
         .child(
             div()
                 .text_sm()
-                .text_color(rgb(palette::TEXT_MUTED))
+                .text_color(rgb(palette::current().text_muted))
                 .child(description),
         )
 }
@@ -205,9 +223,9 @@ fn switch(enabled: bool) -> impl IntoElement {
         .items_center()
         .justify_start()
         .bg(if enabled {
-            rgb(palette::ACCENT)
+            rgb(palette::current().accent)
         } else {
-            rgb(palette::SWITCH_OFF)
+            rgb(palette::current().switch_off)
         })
         .child(
             div()
@@ -226,20 +244,20 @@ fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui_kit
         .rounded_sm()
         .text_sm()
         .text_color(if enabled {
-            rgb(palette::TEXT_BUTTON)
+            rgb(palette::current().text_button)
         } else {
-            rgb(palette::TEXT_DISABLED)
+            rgb(palette::current().text_disabled)
         })
         .bg(if enabled {
-            rgb(palette::STEP_BG)
+            rgb(palette::current().step_bg)
         } else {
-            rgb(palette::STEP_BG_DISABLED)
+            rgb(palette::current().step_bg_disabled)
         })
         .child(label);
     if enabled {
         button = button
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(palette::STEP_BG_HOVER)));
+            .hover(|s| s.bg(rgb(palette::current().step_bg_hover)));
     }
     button
 }
@@ -254,17 +272,17 @@ fn step_button(label: &'static str, enabled: bool) -> gpui_kit::Div {
         .rounded_sm()
         .text_lg()
         .text_color(if enabled {
-            rgb(palette::TEXT)
+            rgb(palette::current().text)
         } else {
-            rgb(palette::TEXT_DISABLED)
+            rgb(palette::current().text_disabled)
         })
         .bg(if enabled {
-            rgb(palette::STEP_BG)
+            rgb(palette::current().step_bg)
         } else {
-            rgb(palette::STEP_BG_DISABLED)
+            rgb(palette::current().step_bg_disabled)
         })
         .when(enabled, |this| {
-            this.hover(|s| s.bg(rgb(palette::STEP_BG_HOVER)))
+            this.hover(|s| s.bg(rgb(palette::current().step_bg_hover)))
                 .cursor_pointer()
         })
         .child(label)
@@ -296,13 +314,16 @@ pub fn open_settings_window(
     }
     let _ = cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(520.), px(420.)), cx)),
+            window_bounds: Some(WindowBounds::centered(size(px(520.), px(520.)), cx)),
             titlebar: None,
             kind: WindowKind::Normal,
             is_resizable: false,
             ..Default::default()
         },
-        move |_, cx| cx.new(|_| SettingsWindow { store, scheduler }),
+        move |window, cx| {
+            crate::ui::follow_system_appearance(window);
+            cx.new(|_| SettingsWindow { store, scheduler })
+        },
     );
 }
 

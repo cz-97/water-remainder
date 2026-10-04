@@ -81,7 +81,7 @@ impl MainWindow {
                     .flex()
                     .justify_center()
                     .text_sm()
-                    .text_color(rgb(palette::TEXT_MUTED))
+                    .text_color(rgb(palette::current().text_muted))
                     .child(label),
             );
         }
@@ -99,11 +99,6 @@ impl MainWindow {
                 let day = month.with_day(index - leading + 1).unwrap_or(month);
                 let count = input.counts.count(day);
                 let level = calendar_level(count);
-                let text = match level {
-                    0 => palette::TEXT_SOFT,
-                    1..=4 => palette::CALENDAR_TEXT_DARK,
-                    _ => palette::WHITE,
-                };
                 let mut cell = div()
                     .w(px(30.))
                     .h(px(30.))
@@ -114,10 +109,12 @@ impl MainWindow {
                     .text_sm()
                     .cursor_pointer()
                     .bg(calendar_color(count))
-                    .text_color(rgb(text))
+                    .text_color(rgb(palette::calendar_text(level)))
                     .child(format!("{}", day.day()));
                 if day == input.selected {
-                    cell = cell.border_2().border_color(rgb(palette::WHITE));
+                    cell = cell
+                        .border_2()
+                        .border_color(rgb(palette::current().selection_ring));
                 }
                 week = week.child(cell.on_mouse_down(
                     MouseButton::Left,
@@ -166,14 +163,14 @@ impl MainWindow {
             .rounded_sm()
             .text_xl()
             .text_color(rgb(match target {
-                Some(_) => palette::TEXT_SOFT,
-                None => palette::TEXT_DISABLED,
+                Some(_) => palette::current().text_soft,
+                None => palette::current().text_disabled,
             }))
             .child(label);
         match target {
             Some(target) => button
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(palette::ROW_HOVER)))
+                .hover(|style| style.bg(rgb(palette::current().row_hover)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, _, cx| {
@@ -192,7 +189,7 @@ impl MainWindow {
         if timestamps.is_empty() {
             records = records.child(
                 div()
-                    .text_color(rgb(palette::TEXT_MUTED))
+                    .text_color(rgb(palette::current().text_muted))
                     .child("这天没有喝水记录"),
             );
         } else {
@@ -216,7 +213,7 @@ impl MainWindow {
                                 .w(px(8.))
                                 .h(px(8.))
                                 .rounded_full()
-                                .bg(rgb(palette::ACCENT)),
+                                .bg(rgb(palette::current().accent)),
                         )
                         .child(text),
                 );
@@ -231,7 +228,12 @@ impl MainWindow {
             .flex()
             .items_center()
             .child(
-                titlebar_button("settings-button", palette::TITLEBAR_HOVER, ACTION_ICON_SIZE)
+                titlebar_button(
+                    "settings-button",
+                    palette::current().titlebar_hover,
+                    palette::current().titlebar_fg,
+                    ACTION_ICON_SIZE,
+                )
                     .cursor_pointer()
                     .child("\u{e713}")
                     .on_mouse_down(
@@ -273,8 +275,8 @@ impl Render for MainWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(palette::WINDOW_BG))
-            .text_color(rgb(palette::TEXT))
+            .bg(rgb(palette::current().window_bg))
+            .text_color(rgb(palette::current().text))
             .child(title_bar)
             .child(
                 div()
@@ -313,7 +315,7 @@ impl Render for MainWindow {
                             .child(
                                 div()
                                     .mt_1()
-                                    .text_color(rgb(palette::TEXT_MUTED))
+                                    .text_color(rgb(palette::current().text_muted))
                                     .child(format_date(input.selected)),
                             )
                             .child(timeline),
@@ -418,6 +420,7 @@ fn create_main_window(
                     selected_date: today,
                     view_month: today.with_day(1).unwrap_or(today),
                 });
+                crate::ui::follow_system_appearance(window);
                 window.on_window_should_close(cx, move |window, cx| {
                     close_settings_window(cx);
                     if let Ok(mut store) = close_store.lock() {

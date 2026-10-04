@@ -54,12 +54,15 @@ impl Render for ReminderWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tx = self.scheduler.clone();
         let status = self.status_text();
+        // 浮层外壳恒为深色（见 `palette::overlay`）：整屏压暗才能让水杯插图与白字立住。
+        // 但主按钮是唯一跟着界面走的地方 —— 用系统浅色下的深蓝，
+        // 浅色外观时按钮仍是蓝底白字而不是浅得看不见。
         let drink = div()
             .px_10()
             .py_4()
             .rounded_md()
-            .bg(rgb(palette::ACCENT))
-            .hover(|s| s.bg(rgb(palette::ACCENT_HOVER)))
+            .bg(rgb(palette::current().accent))
+            .hover(|s| s.bg(rgb(palette::current().accent_hover)))
             .cursor_pointer()
             .text_color(rgb(palette::WHITE))
             .text_3xl()
@@ -77,9 +80,9 @@ impl Render for ReminderWindow {
             .py_4()
             .rounded_md()
             .border_1()
-            .border_color(rgb(palette::BORDER))
+            .border_color(rgb(palette::overlay::BORDER))
             .cursor_pointer()
-            .text_color(rgb(palette::TEXT_BUTTON))
+            .text_color(rgb(palette::overlay::TEXT))
             .text_3xl()
             .child("跳过")
             .on_mouse_down(
@@ -93,7 +96,7 @@ impl Render for ReminderWindow {
             .justify_start()
             .items_center()
             .gap_2()
-            .bg(palette::overlay_bg())
+            .bg(palette::overlay::bg())
             .child(
                 div()
                     .text_color(rgb(palette::WHITE))
@@ -105,7 +108,7 @@ impl Render for ReminderWindow {
             .child(
                 div()
                     .mt_2()
-                    .text_color(rgb(palette::TEXT_SOFT))
+                    .text_color(rgb(palette::overlay::TEXT))
                     .text_size(Rems(1.05))
                     .child(status),
             )
@@ -168,7 +171,8 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remain
                 display_id: Some(display.id()),
                 ..Default::default()
             },
-            move |_, cx| {
+            move |window, cx| {
+                crate::ui::follow_system_appearance(window);
                 cx.new(|cx| {
                     // 每秒 notify 一次触发重绘，让两处倒计时按秒跳动。
                     // 窗口关闭后弱引用升级失败，任务自行退出。

@@ -124,11 +124,21 @@
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
   - **中央插图可换**：默认用内置 `water.png`；若数据目录下存在 `reminder.img`（由设置窗「更换图片」写入）则优先用它，按文件头魔数解码（png / jpg / gif / bmp / webp / tif / ico），无法解析时回退内置图。
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
-- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。
+- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）+ 一个只说明「主题跟随系统」的静态行。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。窗口高度已为新增的「外观」分组从 420 调到 520，并给内容区加了 `overflow_y_scroll`（需先 `.id(..)`，`overflow_*` 是 `InteractiveElement` 的方法），以后再加设置项不会把底部裁掉。
 
-`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有三样：`id`、悬停底色与图标字号（控制键 12、功能键 14）。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、外观订阅 `follow_system_appearance`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有四样：`id`、悬停底色、悬停前景色与图标字号（控制键 12、功能键 14）—— 悬停前景色也要传，是因为浅色外观下深色图标落在红色关闭键上会看不清。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
-`palette` 是全部界面颜色的唯一来源。因为 `gpui_kit::rgb()` 不是 `const fn`，无法定义 `const Rgba`，所以这里存原始 `u32`，使用处统一写 `rgb(palette::ACCENT)`；浮层那层半透明遮罩是 `hsla`，单独提供 `palette::overlay_bg()`。改主题只需动这一个模块。
+**主题跟随系统深浅（`palette`）**
+
+配色不再是编译期常量，而是深浅两张表 + 一个 `AtomicU8` 记录当前外观。`palette::current()` 返回其中一张的引用，所有取色写 `rgb(palette::current().accent)`；改配色只需动这一个模块。
+
+- `palette::set_appearance(appearance)` 把 gpui 的 `WindowAppearance`（`Vibrant*` 合并到对应普通变体）折成一个位存进全局。
+- `ui::follow_system_appearance(window)` 是**每个窗口**都要调一次的订阅入口：先用 `window.appearance()` 校正一次全局值（进程可能长时间没有窗口，期间系统切换深浅就没人更新过配色），再 `observe_window_appearance` 订阅后续变化并 `window.refresh()` 重绘。`Subscription` 是 RAII 守卫，不 `detach()` 会在函数返回时注销掉。
+- **必须逐窗订阅**：gpui 的外观观察者是按窗口注册的，Windows 侧来自 `ImmersiveColorSet` 系统广播，每个顶层窗口各收到一份；而配色是全局的，所以三个窗口都订阅，谁先收到都行。
+- 颜色只在 GPUI 主线程上被读（每次 `render`）与写（观察者回调），所以 `AtomicU8` 足够，不需要锁也不存在撕裂。
+- 提醒浮层（`palette::overlay`）**刻意不随外观变化**：整屏遮罩压暗桌面才能让水杯插图与白字立住，浅色外观下换成透明会让插图整个糊进白底。只有「喝了」按钮用界面强调色（浅色下为深蓝，仍是蓝底白字）。
+- 热力图 1..=8 级两套外观共用同一段蓝（蓝到足够深时在白底与深底上都立得住），只有 0 次那一档的底色与数字随外观变。
+- 设置窗不提供主题开关，只在「外观」分组里写明跟随系统，避免「界面没变」被当成 bug。
 
 **5. 平台适配层（`platform/`）**
 
@@ -176,7 +186,7 @@ src/
 │   ├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
 │   └── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
 ├── ui/                      界面（GPUI View 与共享部件）
-│   ├── mod.rs               时间工具、palette 配色、标题栏与共用按钮样式
+│   ├── mod.rs               时间工具、palette 配色与外观订阅、标题栏与共用按钮样式
 │   ├── main_window.rs       主窗口：月历 + 时间轴
 │   ├── reminder_window.rs   全屏提醒浮层
 │   └── settings_window.rs   设置窗口

@@ -5,8 +5,23 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-const MIN_INTERVAL: u64 = 60;
+/// 最小间隔（秒）。调度线程也用它兜底，防止 0 造成紧循环。
+pub const MIN_INTERVAL: u64 = 60;
 pub const DEFAULT_INTERVAL: u64 = 45 * MIN_INTERVAL;
+
+/// 把任意来源的间隔收敛到最接近的合法档位。
+///
+/// `settings.txt` 是纯文本、可以手改，旧版本也可能留下表外的值。不收敛会有两个后果：
+/// `0` 让调度线程的 `recv_timeout(0)` 立刻超时、deadline 又永远已过，于是退化成
+/// 每轮发一次提醒的紧循环；表外值让设置窗的步进器 `position(..)` 落到索引 0，
+/// 显示错误分档，点一下就把原值覆盖成表里的第二档。正好落在两档中间时取下界。
+pub fn normalize_interval(seconds: u64) -> u64 {
+    INTERVALS
+        .iter()
+        .copied()
+        .min_by_key(|candidate| candidate.abs_diff(seconds))
+        .unwrap_or(DEFAULT_INTERVAL)
+}
 
 /// 可选提醒间隔（秒），设置窗与调度器共用这一份来源。
 pub const INTERVALS: &[u64] = &[
@@ -59,10 +74,7 @@ fn settings_file() -> PathBuf {
 
 pub fn load_store() -> Store {
     let mut s = Store {
-        settings: Settings {
-            interval_secs: DEFAULT_INTERVAL,
-            autostart: false,
-        },
+        settings: Settings::default(),
         window_state: None,
     };
     if let Ok(text) = fs::read_to_string(settings_file()) {
@@ -70,7 +82,9 @@ pub fn load_store() -> Store {
             let mut p = line.splitn(2, '=');
             match (p.next(), p.next()) {
                 (Some("interval"), Some(v)) => {
-                    s.settings.interval_secs = v.parse().unwrap_or(DEFAULT_INTERVAL)
+                    // 解析失败与越界都收敛到最近的合法档位，见 `normalize_interval`。
+                    s.settings.interval_secs =
+                        normalize_interval(v.trim().parse().unwrap_or(DEFAULT_INTERVAL))
                 }
                 (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
                 (Some("window_x"), Some(v)) => {

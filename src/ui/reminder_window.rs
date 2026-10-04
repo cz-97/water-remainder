@@ -23,6 +23,9 @@ pub struct ReminderWindow {
     last_drink: Option<u64>,
     /// 下一次提醒的时刻（Unix 秒）。
     next_reminder: u64,
+    /// 上一次点「喝了」是否写库失败。失败时不顺延 deadline，改为留在浮层上提示，
+    /// 这是唯一能让用户察觉记录没保存的通道。
+    save_failed: bool,
 }
 
 impl ReminderWindow {
@@ -84,10 +87,16 @@ impl Render for ReminderWindow {
             .child("喝了")
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |_, _, w, _| {
-                    save_time();
-                    let _ = tx.send(SchedulerCmd::Reschedule(RescheduleType::Drink));
-                    w.remove_window();
+                cx.listener(move |this, _, w, cx| {
+                    if save_time() {
+                        let _ = tx.send(SchedulerCmd::Reschedule(RescheduleType::Drink));
+                        w.remove_window();
+                    } else {
+                        // 记录没落盘：此时顺延提醒等于把丢失的打卡当成成功，
+                        // 下一次提醒会按错误的时间点排期。保留浮层并提示，让用户重试。
+                        this.save_failed = true;
+                        cx.notify();
+                    }
                 }),
             );
         let skip = div()
@@ -127,6 +136,15 @@ impl Render for ReminderWindow {
                     .text_size(Rems(1.05))
                     .child(status),
             )
+            .when(self.save_failed, |this| {
+                this.child(
+                    div()
+                        .mt_2()
+                        .text_color(rgb(palette::overlay::WARNING))
+                        .text_size(Rems(1.05))
+                        .child("刚才的记录没能保存，请再点一次「喝了」"),
+                )
+            })
             .child(img(self.image.clone()).size_128())
             .child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
@@ -209,6 +227,7 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remain
                         image,
                         last_drink,
                         next_reminder,
+                        save_failed: false,
                     }
                 })
             },

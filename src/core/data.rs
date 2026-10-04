@@ -13,7 +13,9 @@ use std::{
 
 type DbPool = Pool<SqliteConnectionManager>;
 
-static DB_POOL: OnceLock<DbPool> = OnceLock::new();
+/// 连接池。`None` 表示存储不可用（建库或建池失败），此时所有读写都安全退化为空结果，
+/// 而不是让整个进程消失。用 `OnceLock` 缓存结论，失败不重试。
+static DB_POOL: OnceLock<Option<DbPool>> = OnceLock::new();
 
 /// 按月缓存的日级聚合：key 为当月 1 号。未访问过的月份不查库；查过的月份（含空月）永久命中内存。
 static MONTHS: OnceLock<RwLock<BTreeMap<NaiveDate, Arc<DayCounts>>>> = OnceLock::new();
@@ -75,8 +77,7 @@ fn data_file() -> PathBuf {
 
 fn init_database(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
-        "PRAGMA busy_timeout = 5000;
-         PRAGMA journal_mode = WAL;
+        "PRAGMA journal_mode = WAL;
 
          CREATE TABLE IF NOT EXISTS drink_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,36 +89,57 @@ fn init_database(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn db_pool() -> &'static DbPool {
-    DB_POOL.get_or_init(|| {
-        let path = data_file();
+/// 数据库的首次初始化。失败时返回 `false` 而不是 panic：本程序是
+/// `windows_subsystem = "windows"` 的托盘程序（release 下 `panic = "abort"`），
+/// panic 的表现是进程连同托盘图标一起无声消失，用户拿不到任何线索。
+/// 数据文件损坏、被其它程序独占、目录无权限都会走到这里。
+fn initialize(path: &std::path::Path) -> bool {
+    if let Some(dir) = path.parent()
+        && fs::create_dir_all(dir).is_err()
+    {
+        return false;
+    }
 
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).expect("failed to create database directory");
-        }
+    let Ok(conn) = rusqlite::Connection::open(path) else {
+        return false;
+    };
+    if init_database(&conn).is_err() {
+        return false;
+    }
+    // 临时连接用完即弃：连接池里的连接由 `with_init` 各自补 PRAGMA。
+    drop(conn);
+    true
+}
 
-        // 先创建临时连接
-        let conn = rusqlite::Connection::open(&path).expect("failed to open database");
+fn db_pool() -> Option<&'static DbPool> {
+    DB_POOL
+        .get_or_init(|| {
+            let path = data_file();
+            if !initialize(&path) {
+                return None;
+            }
 
-        // 初始化数据库
-        init_database(&conn).expect("failed to initialize database");
+            // `journal_mode` 是写进文件头的持久设置，只需建库时设一次；`busy_timeout`
+            // 与 `synchronous` 是**每连接**的，必须在 `with_init` 里逐条设置 ——
+            // 只写在初始化用的临时连接上对池内连接毫无作用。
+            let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+                conn.execute_batch(
+                    "PRAGMA busy_timeout = 5000;
+                     PRAGMA synchronous = NORMAL;",
+                )
+            });
 
-        // 初始化完成后关闭临时连接
-        drop(conn);
-
-        // 再创建连接池
-        let manager = SqliteConnectionManager::file(path);
-
-        Pool::builder()
-            .max_size(4)
-            .min_idle(Some(1))
-            .build(manager)
-            .expect("failed to create database connection pool")
-    })
+            Pool::builder()
+                .max_size(4)
+                .min_idle(Some(1))
+                .build(manager)
+                .ok()
+        })
+        .as_ref()
 }
 
 fn get_conn() -> Option<PooledConnection<SqliteConnectionManager>> {
-    db_pool().get().ok()
+    db_pool()?.get().ok()
 }
 
 /// 单个自然月的日级聚合：一天一行，与明细行数无关。优先按本地零点区间过滤，
@@ -240,19 +262,23 @@ fn query_day(day: NaiveDate) -> Vec<u64> {
 
 /// 某个月（传入该月任意一天）的天级聚合。首次访问该月时按索引区间查一次库，
 /// 之后（含空月）永久命中内存 —— 日历切月因此只在首次产生一次 SELECT。
+///
+/// 查询刻意留在锁外（先查、后插入）：持写锁跑 SQL 会把日历每帧读聚合、
+/// 调度线程读极值全部阻塞在一个索引扫描上。
 pub fn month_counts(day_in_month: NaiveDate) -> Arc<DayCounts> {
     let month = day_in_month.with_day(1).unwrap_or(day_in_month);
     if let Some(counts) = months_slot().read().unwrap().get(&month).cloned() {
         return counts;
     }
 
-    let mut slot = months_slot().write().unwrap();
-    if let Some(counts) = slot.get(&month) {
-        return counts.clone();
-    }
     let counts = Arc::new(DayCounts::from_rows(query_month_counts(month)));
-    slot.insert(month, counts.clone());
-    counts
+    // 并发下同一个月可能被查两次，两份内容等价，保留先写入的那份即可。
+    months_slot()
+        .write()
+        .unwrap()
+        .entry(month)
+        .or_insert_with(|| counts.clone())
+        .clone()
 }
 
 /// 某天的明细。该天次数为 0 直接返回空、不查库；查过一次后就命中缓存。
@@ -276,16 +302,14 @@ pub fn day_detail(day: NaiveDate) -> Arc<Vec<u64>> {
 }
 
 /// 全局时间戳范围。首次调用做一次索引 MIN/MAX 查询，之后命中内存。
+/// 与 `month_counts` 同理，查询留在锁外。
 fn bounds() -> Bounds {
     if let Some(bounds) = *bounds_slot().read().unwrap() {
         return bounds;
     }
 
-    let mut slot = bounds_slot().write().unwrap();
-    if slot.is_none() {
-        *slot = Some(query_bounds());
-    }
-    (*slot).unwrap()
+    let queried = query_bounds();
+    *bounds_slot().write().unwrap().get_or_insert(queried)
 }
 
 /// 全部记录中最近的一次喝水时间戳。
@@ -304,9 +328,13 @@ pub fn get_elapsed() -> Option<u64> {
 }
 
 /// 落库一次喝水记录，并同步进内存缓存（不触发任何回读）。
-pub fn save_time() {
+///
+/// 返回是否真的写成功。失败时**不更新任何缓存** —— 否则内存里会多出一条数据库里
+/// 并不存在的记录，界面显示与落盘内容就此分叉；调用方（提醒浮层）也必须据此决定
+/// 是否顺延提醒，把丢失的打卡当成成功会让下一次提醒按错误的时间点排期。
+pub fn save_time() -> bool {
     let Some(conn) = get_conn() else {
-        return;
+        return false;
     };
 
     let timestamp = now();
@@ -318,7 +346,7 @@ pub fn save_time() {
         )
         .is_err()
     {
-        return;
+        return false;
     }
 
     let day = local_date(timestamp);
@@ -346,4 +374,6 @@ pub fn save_time() {
             _ => times.push(timestamp),
         }
     }
+
+    true
 }

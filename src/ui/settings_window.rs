@@ -28,6 +28,9 @@ impl Render for SettingsWindow {
             .lock()
             .map(|s| s.settings.clone())
             .unwrap_or_default();
+        // 设置里的间隔已被 `normalize_interval` 收敛到 `INTERVALS` 内，所以这里的
+        // 索引必然命中；`unwrap_or(0)` 只是防御性兜底，不会造成「显示第 0 档、
+        // 点一下就把用户原值覆盖掉」的情况。
         let interval_index = INTERVALS
             .iter()
             .position(|seconds| *seconds == settings.interval_secs)

@@ -160,6 +160,9 @@ pub mod palette {
         pub const TEXT: u32 = 0xcbd5e1;
         /// 「跳过」按钮描边。
         pub const BORDER: u32 = 0x64748b;
+        /// 记录写入失败时的提示文字。浮层恒为深色底，所以取一个暗底上够醒目的浅红，
+        /// 两套外观下都是同一个值。
+        pub const WARNING: u32 = 0xfca5a5;
     }
 }
 

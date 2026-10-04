@@ -43,7 +43,7 @@ fn main() {
             platform::set_autostart(settings.autostart);
             let (tray, show, quit) = setup_tray();
             std::mem::forget(tray);
-            let (scheduler_tx, alarm_rx) = start_scheduler();
+            let (scheduler_tx, alarm_rx) = start_scheduler(settings.interval_secs);
             // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。
             // `Subscription` 是 RAII 守卫，drop 即注销回调。而 `run` 的启动闭包在
             // 消息循环开始之前就返回了（`gpui-pre-windows/src/platform.rs:508`：先调用

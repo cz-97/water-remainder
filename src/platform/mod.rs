@@ -151,18 +151,111 @@ pub fn style_main_window(window: &gpui_kit::Window) {
 #[cfg(not(windows))]
 pub fn style_main_window(_: &gpui_kit::Window) {}
 
-/// 提醒浮层：禁用 DWM 圆角（铺满整屏时圆角会露出下层桌面）。
+/// 提醒浮层：铺满整屏。
+///
+/// 这里必须**自己**把客户区对齐到显示器矩形，不能只信 `display.bounds()`：
+/// gpui 把逻辑像素经 `to_device_pixels` 换算回物理像素时，`1706.6666 × 1066.6666`
+/// 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带。
+/// 而且浮层带着 `WS_EX_TOPMOST`，缺的正是屏幕最底下一条。
+///
+/// 做法是实测窗口的非客户区边框厚度（这个值随系统主题、缩放而变，只有实测可靠），
+/// 再把**窗口**放大到「显示器尺寸 + 两侧边框」、位置相应左移上移，使**客户区**
+/// 恰好盖满显示器。客户区才是真正被绘制的那块。
 #[cfg(windows)]
 pub fn style_reminder_window(window: &gpui_kit::Window) {
     use windows::Win32::Graphics::Dwm::DWMWCP_DONOTROUND;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER,
+    };
 
-    if let Some(hwnd) = hwnd(window) {
-        set_window_chrome(hwnd, DWMWCP_DONOTROUND);
+    let Some(hwnd) = hwnd(window) else {
+        return;
+    };
+    // 圆角要先关掉：铺满整屏时圆角会露出下层桌面。
+    set_window_chrome(hwnd, DWMWCP_DONOTROUND);
+
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        // 取不到显示器矩形就不动：宁可保持原样，也不要猜一个位置把窗口甩出屏幕。
+        if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
+            return;
+        }
+        let screen = monitor_info.rcMonitor;
+        if let Some(insets) = non_client_insets(hwnd) {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                // 左上角各让出边框厚度，客户区才从屏幕的 0,0 开始。
+                screen.left - insets.left,
+                screen.top - insets.top,
+                (screen.right - screen.left) + insets.left + insets.right,
+                (screen.bottom - screen.top) + insets.top + insets.bottom,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+            );
+        }
     }
 }
 
 #[cfg(not(windows))]
 pub fn style_reminder_window(_: &gpui_kit::Window) {}
+
+/// 窗口四周非客户区（边框）的厚度，单位为物理像素。
+///
+/// 直接实测而不是用 `AdjustWindowRectEx` 推算：`PopUp` 窗口带 `WS_EX_TOPMOST`，
+/// 系统主题与 DPI 缩放都会改变这个厚度，推算值与实际不符（gpui 自己也因此
+/// 预留下这条修正路径）。实测法对两者都成立。
+#[cfg(windows)]
+struct WindowInsets {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(windows)]
+unsafe fn non_client_insets(hwnd: windows::Win32::Foundation::HWND) -> Option<WindowInsets> {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect};
+
+    unsafe {
+        let mut window_rect = RECT::default();
+        let mut client_rect = RECT::default();
+        if GetWindowRect(hwnd, &mut window_rect).is_err()
+            || GetClientRect(hwnd, &mut client_rect).is_err()
+        {
+            return None;
+        }
+        // `GetClientRect` 返回的是客户区内的坐标，要靠 `ClientToScreen` 才能拿到
+        // 它在屏幕上的实际位置。
+        let mut client_top_left = POINT {
+            x: client_rect.left,
+            y: client_rect.top,
+        };
+        let mut client_bottom_right = POINT {
+            x: client_rect.right,
+            y: client_rect.bottom,
+        };
+        if !ClientToScreen(hwnd, &mut client_top_left).as_bool()
+            || !ClientToScreen(hwnd, &mut client_bottom_right).as_bool()
+        {
+            return None;
+        }
+        Some(WindowInsets {
+            left: client_top_left.x - window_rect.left,
+            top: client_top_left.y - window_rect.top,
+            right: window_rect.right - client_bottom_right.x,
+            bottom: window_rect.bottom - client_bottom_right.y,
+        })
+    }
+}
 
 /// 把主窗从托盘唤回：沿用最大化状态置前，但不抢焦点。
 ///

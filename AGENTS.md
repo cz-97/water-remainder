@@ -145,7 +145,7 @@
 所有 `unsafe` 的 Win32 调用集中于此，且全部提供非 Windows 空实现，保持上层代码零 `cfg` 分支：
 
 - 对外接口一律接收 `&gpui_kit::Window`（只有 `show_main_window` 需要 `&mut`，以便在显示前置脏），原生 HWND 的提取（`HasWindowHandle` → `RawWindowHandle::Win32`）封在内部，调用方不再出现 `raw_window_handle` 依赖与 `cfg` 块
-- `style_main_window` / `style_reminder_window` — 通过 DWM 设置窗口圆角（浮层直角、主窗圆角）并去掉系统描边；两者共用同一个 `set_window_chrome`，只差圆角常量
+- `style_main_window` / `style_reminder_window` — 两者都经 `set_window_chrome` 设置 DWM 圆角（主窗圆角、浮层直角）。**`style_reminder_window` 还负责把浮层铺满整屏**：只信 `display.bounds()` 不够，gpui 把逻辑像素经 `to_device_pixels` 换回物理像素时，`1706.6666 × 1066.6666` 这类值会因浮点截断少几个像素（实测正好 5px），底部就露出一条没被遮罩覆盖的窄带（而浮层带 `WS_EX_TOPMOST`，缺的正是屏幕最底下一条）。做法是实测窗口非客户区边框厚度 `non_client_insets`，再把**窗口**放大到「显示器尺寸 + 两侧边框」、位置左上各让出边框，使**客户区**（真正被绘制的那块）恰好盖满显示器。边框厚度随系统主题与 DPI 缩放而变，所以只实测、不用 `AdjustWindowRectEx` 推算。取不到显示器矩形或边框就整个跳过，绝不猜一个位置把窗口甩出屏幕
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
 - `set_autostart` — 注册表 Run 键的增删
 - `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定；句柄刻意不关闭，进程存活期间持续持有互斥体

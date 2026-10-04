@@ -5,12 +5,14 @@ use crate::{
         scheduler::{RescheduleType, SchedulerCmd},
     },
     platform,
-    ui::{image_format, palette, titlebar, window_button},
+    ui::{image_format, palette},
 };
-use gpui_kit::{
-    App, Context, MouseButton, Window, WindowBounds, WindowControlArea, WindowKind, WindowOptions,
-    div, prelude::*, px, rgb, size,
+use gpui_kit::component::{
+    Disableable, TitleBar,
+    button::{Button, ButtonVariants},
+    switch::Switch,
 };
+use gpui_kit::{App, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size};
 use std::{
     fs,
     sync::{Arc, Mutex, mpsc},
@@ -35,56 +37,24 @@ impl Render for SettingsWindow {
         let can_decrease = interval_index > 0;
         let can_increase = interval_index + 1 < INTERVALS.len();
 
-        let store = self.store.clone();
-        let scheduler = self.scheduler.clone();
-        let autostart = div()
-            .id("autostart-setting")
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_3()
-            .rounded_md()
-            .hover(|s| s.bg(rgb(palette::ROW_HOVER)))
-            .cursor_pointer()
-            .child(setting_copy("开机启动", "登录 Windows 后自动启动喝水提醒"))
-            .child(switch(settings.autostart))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_, _, _, cx| {
-                    let enabled = update_settings(&store, |settings| {
-                        settings.autostart = !settings.autostart;
-                        settings.autostart
-                    });
-                    if let Some(enabled) = enabled {
-                        platform::set_autostart(enabled);
-                    }
-                    cx.notify();
-                }),
-            );
-
-        let store = self.store.clone();
-        let scheduler_for_decrease = scheduler.clone();
-        let decrease = step_button("−", can_decrease).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |_, _, _, cx| {
-                if can_decrease {
-                    set_interval(&store, &scheduler_for_decrease, interval_index - 1);
-                    cx.notify();
-                }
-            }),
-        );
-        let store = self.store.clone();
-        let scheduler_for_increase = scheduler.clone();
-        let increase = step_button("+", can_increase).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |_, _, _, cx| {
-                if can_increase {
-                    set_interval(&store, &scheduler_for_increase, interval_index + 1);
-                    cx.notify();
-                }
-            }),
-        );
+        let decrease_index = interval_index.saturating_sub(1);
+        let decrease = Button::new("interval-decrease")
+            .label("−")
+            .ghost()
+            .disabled(!can_decrease)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                set_interval(&this.store, &this.scheduler, decrease_index);
+                cx.notify();
+            }));
+        let increase_index = interval_index + 1;
+        let increase = Button::new("interval-increase")
+            .label("+")
+            .ghost()
+            .disabled(!can_increase)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                set_interval(&this.store, &this.scheduler, increase_index);
+                cx.notify();
+            }));
         let interval = div()
             .flex()
             .items_center()
@@ -98,21 +68,30 @@ impl Render for SettingsWindow {
                     .child(format!("{} 分钟", settings.interval_secs / 60)),
             )
             .child(increase);
-        let interval_row = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_3()
-            .rounded_md()
-            .hover(|s| s.bg(rgb(palette::ROW_HOVER)))
-            .child(setting_copy("提醒间隔", "两次提醒之间的等待时间"))
-            .child(interval);
+        let interval_row = row(setting_copy("提醒间隔", "两次提醒之间的等待时间"), interval);
+
+        let autostart = Switch::new("autostart")
+            .checked(settings.autostart)
+            .on_change(cx.listener(|this, checked, _, cx| {
+                let enabled = update_settings(&this.store, |settings| {
+                    settings.autostart = *checked;
+                    settings.autostart
+                });
+                if let Some(enabled) = enabled {
+                    platform::set_autostart(enabled);
+                }
+                cx.notify();
+            }));
+        let autostart_row = row(
+            setting_copy("开机启动", "登录 Windows 后自动启动喝水提醒"),
+            autostart,
+        );
 
         let custom = reminder_image_file().exists();
-        let change = text_button("change-image", "更换", true).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _, _, cx| {
+        let change = Button::new("change-image")
+            .label("更换")
+            .outline()
+            .on_click(cx.listener(|_, _, _, cx| {
                 if let Some(path) = platform::pick_image_file() {
                     if let Ok(bytes) = fs::read(&path) {
                         if image_format(&bytes).is_some() {
@@ -121,29 +100,21 @@ impl Render for SettingsWindow {
                     }
                 }
                 cx.notify();
-            }),
+            }));
+        let reset = Button::new("reset-image")
+            .label("恢复默认")
+            .outline()
+            .disabled(!custom)
+            .on_click(cx.listener(|_, _, _, cx| {
+                let _ = fs::remove_file(reminder_image_file());
+                cx.notify();
+            }));
+        let image_row = row(
+            setting_copy("提醒图片", "提醒浮层中央的插图，可替换为本地图片"),
+            div().flex().items_center().gap_2().child(change).child(reset),
         );
-        let mut reset = text_button("reset-image", "恢复默认", custom);
-        if custom {
-            reset = reset.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _, _, cx| {
-                    let _ = fs::remove_file(reminder_image_file());
-                    cx.notify();
-                }),
-            );
-        }
-        let image_row = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_3()
-            .rounded_md()
-            .child(setting_copy("提醒图片", "提醒浮层中央的插图，可替换为本地图片"))
-            .child(div().flex().items_center().gap_2().child(change).child(reset));
 
-        let title_bar = titlebar("设置", window_button("\u{e8bb}", WindowControlArea::Close));
+        let title_bar = TitleBar::new().child("设置");
 
         div()
             .size_full()
@@ -159,26 +130,34 @@ impl Render for SettingsWindow {
                     .flex_col()
                     .gap_1()
                     .p_5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(palette::TEXT_MUTED))
-                            .mb_2()
-                            .child("提醒"),
-                    )
+                    .child(section_title("提醒"))
                     .child(interval_row)
                     .child(image_row)
                     .child(div().h(px(12.)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(palette::TEXT_MUTED))
-                            .mb_2()
-                            .child("启动"),
-                    )
-                    .child(autostart),
+                    .child(section_title("启动"))
+                    .child(autostart_row),
             )
     }
+}
+
+fn section_title(text: &'static str) -> impl IntoElement {
+    div()
+        .text_sm()
+        .text_color(rgb(palette::TEXT_MUTED))
+        .mb_2()
+        .child(text)
+}
+
+fn row(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px_4()
+        .py_3()
+        .rounded_md()
+        .child(left)
+        .child(right)
 }
 
 fn setting_copy(title: &'static str, description: &'static str) -> impl IntoElement {
@@ -193,81 +172,6 @@ fn setting_copy(title: &'static str, description: &'static str) -> impl IntoElem
                 .text_color(rgb(palette::TEXT_MUTED))
                 .child(description),
         )
-}
-
-fn switch(enabled: bool) -> impl IntoElement {
-    div()
-        .w(px(36.))
-        .h(px(20.))
-        .rounded_full()
-        .p(px(2.))
-        .flex()
-        .items_center()
-        .justify_start()
-        .bg(if enabled {
-            rgb(palette::ACCENT)
-        } else {
-            rgb(palette::SWITCH_OFF)
-        })
-        .child(
-            div()
-                .size(px(16.))
-                .rounded_full()
-                .bg(rgb(palette::WHITE))
-                .when(enabled, |this| this.ml(px(16.))),
-        )
-}
-
-fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let mut button = div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_sm()
-        .text_sm()
-        .text_color(if enabled {
-            rgb(palette::TEXT_BUTTON)
-        } else {
-            rgb(palette::TEXT_DISABLED)
-        })
-        .bg(if enabled {
-            rgb(palette::STEP_BG)
-        } else {
-            rgb(palette::STEP_BG_DISABLED)
-        })
-        .child(label);
-    if enabled {
-        button = button
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(palette::STEP_BG_HOVER)));
-    }
-    button
-}
-
-fn step_button(label: &'static str, enabled: bool) -> gpui_kit::Div {
-    div()
-        .w(px(28.))
-        .h(px(28.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .text_lg()
-        .text_color(if enabled {
-            rgb(palette::TEXT)
-        } else {
-            rgb(palette::TEXT_DISABLED)
-        })
-        .bg(if enabled {
-            rgb(palette::STEP_BG)
-        } else {
-            rgb(palette::STEP_BG_DISABLED)
-        })
-        .when(enabled, |this| {
-            this.hover(|s| s.bg(rgb(palette::STEP_BG_HOVER)))
-                .cursor_pointer()
-        })
-        .child(label)
 }
 
 fn set_interval(store: &Arc<Mutex<Store>>, scheduler: &mpsc::Sender<SchedulerCmd>, index: usize) {
@@ -297,10 +201,8 @@ pub fn open_settings_window(
     let _ = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(520.), px(420.)), cx)),
-            titlebar: None,
-            kind: WindowKind::Normal,
             is_resizable: false,
-            ..Default::default()
+            ..TitleBar::window_options()
         },
         move |_, cx| cx.new(|_| SettingsWindow { store, scheduler }),
     );

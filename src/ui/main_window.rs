@@ -5,17 +5,19 @@ use crate::{
         scheduler::SchedulerCmd,
     },
     ui::{
-        ACTION_ICON_SIZE, calendar_color, calendar_level, format_clock, format_date, local_date,
-        now, palette, relative_to_now,
+        calendar_color, calendar_level, format_clock, format_date, local_date, now, palette,
+        relative_to_now,
         settings_window::{close_settings_window, open_settings_window},
-        titlebar, titlebar_button, window_button,
     },
 };
 use chrono::{Datelike, Local, NaiveDate};
+use gpui_kit::component::{
+    TitleBar,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::{
-    App, Bounds, Context, Div, FontWeight, MouseButton, Stateful, TitlebarOptions, Window,
-    WindowBounds, WindowControlArea, WindowKind, WindowOptions, div, point, prelude::*, px, rgb,
-    size,
+    App, Bounds, Context, Div, FontWeight, MouseButton, Stateful, Window, WindowBounds,
+    WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -225,37 +227,21 @@ impl MainWindow {
         records
     }
 
-    /// 标题栏右侧：设置入口 + 最小化 / 最大化 / 关闭。
-    fn title_actions(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex()
-            .items_center()
-            .child(
-                titlebar_button("settings-button", palette::TITLEBAR_HOVER, ACTION_ICON_SIZE)
-                    .cursor_pointer()
-                    .child("\u{e713}")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            open_settings_window(cx, this.store.clone(), this.scheduler.clone());
-                        }),
-                    ),
-            )
-            .child(window_button("\u{e921}", WindowControlArea::Min))
-            .child(window_button(
-                if window.is_maximized() {
-                    "\u{e923}"
-                } else {
-                    "\u{e922}"
-                },
-                WindowControlArea::Max,
-            ))
-            .child(window_button("\u{e8bb}", WindowControlArea::Close))
+    /// 标题栏右侧：设置入口（窗口控制键由 `TitleBar` 自带）。
+    fn title_actions(&self) -> Button {
+        let store = self.store.clone();
+        let scheduler = self.scheduler.clone();
+        Button::new("settings-button")
+            .label("设置")
+            .ghost()
+            .on_click(move |_, _, cx| {
+                open_settings_window(cx, store.clone(), scheduler.clone());
+            })
     }
 }
 
 impl Render for MainWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 记录分两层：日历只用天级聚合（首次访问读一次库），明细只在选中那天取一次，
         // 且那天次数为 0 时连库都不碰。
         let input = RenderInput {
@@ -267,7 +253,9 @@ impl Render for MainWindow {
         };
         let calendar = self.calendar(&input, cx);
         let timeline = self.timeline(&input);
-        let title_bar = titlebar("喝水提醒", self.title_actions(window, cx));
+        let title_bar = TitleBar::new()
+            .child("喝水提醒")
+            .child(self.title_actions());
 
         div()
             .size_full()
@@ -401,14 +389,8 @@ fn create_main_window(
         .open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("喝水提醒".into()),
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
-                kind: WindowKind::Normal,
                 window_min_size: Some(size(px(500.), px(800.))),
-                ..Default::default()
+                ..TitleBar::window_options()
             },
             move |window, cx| {
                 let close_store = close_store.clone();

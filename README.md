@@ -108,33 +108,34 @@
 拆成两个互不干扰的持久化通道：
 
 - `core/config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。
-- `core/data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。内存在进程内分两层：**天级聚合 `DayCounts`（`BTreeMap<NaiveDate, DayStat{count, last}>`，规模只与「有记录的天数」成正比）** 与 **明细 `DETAILS`（`BTreeMap<NaiveDate, Arc<Vec<u64>>>`，点开某天才查一次）**。`save_time()` 落库成功后只增量更新这两层。提醒文案与调度需要的「上次喝水距今」由 `get_elapsed()` 从聚合层取（`last_time()` = 最后一个分组的 `MAX(timestamp)`），**完全不需要明细**。
+- `core/data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。内存按需分层：**按月懒加载的日级聚合 `MONTHS`（`BTreeMap<月, DayCounts{日期→次数}>`，只在访问某月时查一次，之后含空月永久命中）** 与 **明细 `DETAILS`（`BTreeMap<NaiveDate, Arc<Vec<u64>>>`，点开某天才查一次）**；另有独立的全局极值 `BOUNDS`（最早 / 最近时间戳，供左箭头下界与「上次喝水」）。`save_time()` 落库后只增量更新这些缓存。`get_elapsed()` 由 `last_time()`（全局 `MAX(timestamp)`）得出，**完全不需要明细**。
 
 **记录缓存的生命周期（`core/data.rs`）**
 
-`COUNTS`（天级聚合）与 `DETAILS`（明细，按需）是记录的唯一来源，`LAST_TIME` 之类的旁路缓存已移除。进程运行期间与数据库只有三类交互：
+`MONTHS`（按月聚合，按需）、`DETAILS`（明细，按需）与 `BOUNDS`（全局极值）是记录的唯一来源。进程运行期间与数据库只有这几类交互：
 
 | 时机 | 数据库操作 |
 | --- | --- |
-| 首次 `day_counts()`（进程内第一次要记录，含调度线程 `get_deadline()` → `get_elapsed()` 那次） | 一次 `SELECT date(timestamp,'unixepoch','localtime') AS day, COUNT(*), MAX(timestamp) … GROUP BY day` —— **一天一行，不读明细** |
+| 首次访问某月（启动首帧只访问当月；之后每次切月各访问一次） | 一次区间聚合 `SELECT date(…,'localtime') AS day, COUNT(*) … WHERE timestamp >= ?1 AND timestamp < ?2 GROUP BY day` —— **一个月一行天，命中 `idx_timestamp`，不读明细** |
+| 首次需要「上次喝水 / 最早记录」（调度线程 `get_deadline()`、左箭头下界、提醒浮层） | 一次 `SELECT MIN(timestamp), MAX(timestamp) FROM drink_records` —— 走 `idx_timestamp`，代价与记录数无关 |
 | 首次点开某天，且那天次数 > 0（`day_detail()`） | 一次区间查询 `WHERE timestamp >= ?1 AND timestamp < ?2`，命中 `idx_timestamp` 做索引查找 |
 | 每次点击「喝了」 | 一次 `INSERT` |
 
 三个刻意的取舍：
 
-- **选中日的次数为 0 时一条 SQL 都不发**：`day_detail()` 先查聚合层，为 0 就直接返回空 `Arc`，连缓存条目都不建。
+- **选中日的次数为 0 时一条 SQL 都不发**：`day_detail()` 先查该日所在月的聚合，为 0 就直接返回空 `Arc`，连缓存条目都不建。
 - **某天的明细一天最多查一次**：结果进 `DETAILS`，此后（含窗口重绘）都命中内存。`save_time()` 也只在「那天的明细已经加载过」时才把新时间戳追加进已缓存的那条，**绝不因为写入而顺带加载明细**。
-- **两层缓存都只增不减、不做失效**：若程序运行期间由外部直接改写 `data.db`，界面不会感知（重启进程即重新加载）。
+- **三层缓存都只增不减、不做失效**：若程序运行期间由外部直接改写 `data.db`，界面不会感知（重启进程即重新加载）。
 
-于是 GPUI「每次 draw 都重跑 `render()`」不再有代价：日历每格是 `counts.count(day)`（`BTreeMap` 查找），时间轴是选中日明细的 `Arc` 克隆，都不产生 `SELECT`。代价是日期边界要由 chrono 自己算（`ui::day_bounds()` 给出该本地日的 `[00:00, 次日 00:00)`），换来的是「按天取明细」永远是一次索引区间查找 —— 比按 `date()` 函数过滤快近两个数量级，也不必给表加 `day` 列（SQLite 不允许生成列里用 `localtime`，`INSERT` 会直接报非确定性错误）。
+于是 GPUI「每次 draw 都重跑 `render()`」不再有代价：日历每格是 `counts.count(day)`（`BTreeMap` 查找），时间轴是选中日明细的 `Arc` 克隆，都不产生 `SELECT`（切月仅在该月首次访问时多一次走索引的月度区间查询）。代价是日期边界要由 chrono 自己算（`ui::day_bounds()` 给出该本地日的 `[00:00, 次日 00:00)`），换来的是「按天取明细」永远是一次索引区间查找 —— 比按 `date()` 函数过滤快近两个数量级，也不必给表加 `day` 列（SQLite 不允许生成列里用 `localtime`，`INSERT` 会直接报非确定性错误）。
 
 **4. UI 层**
 
 三个独立的 GPUI 窗口，各自是实现了 `Render` 的 View：
 
-- `ui/main_window.rs` — 记录总览。日历为月视图：标题是「年 月」，左右箭头切换 `view_month`（右箭头逐月前进、不允许翻到未来；左箭头逐月后退、退到 `DayCounts::earliest_day` 所在的最早记录月为止），每周以周一为首列；每格是当月某天，背景统一由 `ui::calendar_color()` 按当日次数映射到蓝色梯度（0 次保留色阶底色的深灰格，浅色格用深色数字保证可读），选中日加白框。右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
+- `ui/main_window.rs` — 记录总览。日历为月视图：标题是「年 月」，左右箭头切换 `view_month`（右箭头逐月前进、不允许翻到未来；左箭头逐月后退、退到 `data::earliest_day`（由全局 `MIN(timestamp)` 得出）所在的最早记录月为止），每周以周一为首列；每格是当月某天，背景统一由 `ui::calendar_color()` 按当日次数映射到蓝色梯度（0 次保留色阶底色的深灰格，浅色格用深色数字保证可读），选中日加白框。右侧是选中日期的时间轴，今天额外显示「N 分钟前」相对时间。
   - `MainWindow` 结构体只有 `store` / `scheduler` / `selected_date` / `view_month` 四个字段，**不持有任何记录数据**。渲染时只为每个格子读一次 `counts.count(day)`（返回 `usize`）上色；右侧明细先经 `day_detail(selected)` 取到（懒加载 + 缓存），再按 `Arc` 借用渲染；点某天即改 `selected_date` 并 `cx.notify()` 触发新一轮 `render`。
-  - `render()` 只做三件事：组装一次性的 `RenderInput`（`today` / `selected` / 天级聚合 / 选中日明细）、调用三个子视图、拼外壳。时刻与记录因此是**显式传参**，`calendar()` / `timeline()` / `title_actions()` 不会各自去读全局状态。三个子视图的返回类型写成具体的 `Div` 而非 `impl IntoElement`，否则返回值会隐式借用 `&mut Context`，同一个 `render` 里就没法把 `cx` 依次交给多个子视图。
+  - `render()` 只做三件事：组装一次性的 `RenderInput`（`today` / `selected` / `earliest` / 当月聚合 / 选中日明细）、调用三个子视图、拼外壳。时刻与记录因此是**显式传参**，`calendar()` / `timeline()` / `title_actions()` 不会各自去读全局状态。三个子视图的返回类型写成具体的 `Div` 而非 `impl IntoElement`，否则返回值会隐式借用 `&mut Context`，同一个 `render` 里就没法把 `cx` 依次交给多个子视图。
   - 关闭按钮**不销毁窗口**：`on_window_should_close` 采集并落盘窗口状态后调 `platform::hide_main_window()`，返回 `false` 让 gpui 吞掉 `WM_CLOSE`（不再交给 `DefWindowProc` 销毁）。隐藏期间窗口收不到 `WM_PAINT`，也没有任何路径会 `notify` 它——**记录入库只写缓存、不通知主窗**，所以日历的刷新完全依赖 `show_main_window` 里那次置脏：唤回时重绘一帧，重新取聚合与选中日明细（都命中缓存）+ `local_date(now())`。
 - `ui/reminder_window.rs` — 覆盖整个主显示器的透明 `WindowKind::PopUp` 浮层。文案不预先生成，而是把 `last_drink` / `next_reminder` 两个时间戳存进 View，渲染时按「当前时刻」现算，因此有几点行为：
   - **两处倒计时按秒跳动**。实体创建时 `cx.spawn` 起一个 1 秒周期的后台定时任务，每轮醒来 `cx.notify()` 触发重绘（`notify` → `invalidate_view` 置窗口 dirty 并唤醒平台 waker → 下一帧重跑 `render`）。窗口关闭后弱引用升级失败，任务自行退出，不会泄漏。
@@ -206,7 +207,7 @@ src/
 ├── main.rs                  入口、单实例、事件汇聚循环
 ├── core/                    领域逻辑（配置、存储、调度，无 UI 依赖）
 │   ├── config.rs            设置模型与 settings.txt 读写、间隔常量表
-│   ├── data.rs              SQLite 连接池、天级聚合缓存 + 按需明细、记录读写
+│   ├── data.rs              SQLite 连接池、按月聚合 + 按需明细、记录读写
 │   ├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
 │   └── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
 ├── ui/                      界面（GPUI View 与共享部件）

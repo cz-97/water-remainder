@@ -1,6 +1,6 @@
 use crate::core::paths::app_dir;
 use crate::ui::{day_bounds, local_date, now};
-use chrono::NaiveDate;
+use chrono::{Datelike, Months, NaiveDate};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, params_from_iter, types::Value};
@@ -15,71 +15,57 @@ type DbPool = Pool<SqliteConnectionManager>;
 
 static DB_POOL: OnceLock<DbPool> = OnceLock::new();
 
-/// 天级聚合缓存（日期 → 次数 / 当天最后一次）。进程内只从数据库读一次，之后仅由 save_time 增量维护。
-static COUNTS: OnceLock<RwLock<Option<Arc<DayCounts>>>> = OnceLock::new();
+/// 按月缓存的日级聚合：key 为当月 1 号。未访问过的月份不查库；查过的月份（含空月）永久命中内存。
+static MONTHS: OnceLock<RwLock<BTreeMap<NaiveDate, Arc<DayCounts>>>> = OnceLock::new();
 
 /// 明细缓存：只放「查过的日期」。空天靠次数短路，永远不会进这里。
 static DETAILS: OnceLock<RwLock<BTreeMap<NaiveDate, Arc<Vec<u64>>>>> = OnceLock::new();
 
-fn counts_slot() -> &'static RwLock<Option<Arc<DayCounts>>> {
-    COUNTS.get_or_init(|| RwLock::new(None))
+/// 全局时间戳范围。日历只按需读当月，而左箭头边界与「上次喝水」需要全局极值，
+/// 因此单独用一次走 `idx_timestamp` 索引的 MIN/MAX 查询维护，与按月聚合解耦。
+static BOUNDS: OnceLock<RwLock<Option<Bounds>>> = OnceLock::new();
+
+fn months_slot() -> &'static RwLock<BTreeMap<NaiveDate, Arc<DayCounts>>> {
+    MONTHS.get_or_init(|| RwLock::new(BTreeMap::new()))
 }
 
 fn details_slot() -> &'static RwLock<BTreeMap<NaiveDate, Arc<Vec<u64>>>> {
     DETAILS.get_or_init(|| RwLock::new(BTreeMap::new()))
 }
 
-/// 某一天的聚合结果。`last` 是那天最后喝水的时刻，使「上次喝水」不必读明细。
-#[derive(Clone, Copy)]
-struct DayStat {
-    count: usize,
-    last: u64,
+fn bounds_slot() -> &'static RwLock<Option<Bounds>> {
+    BOUNDS.get_or_init(|| RwLock::new(None))
 }
 
-/// 日期 → 聚合结果，key 升序。规模只与「有记录的天数」成正比，与明细行数无关。
+/// 全局最早 / 最近一次记录的时间戳；空库时两者均为 None。
+#[derive(Clone, Copy)]
+struct Bounds {
+    min: Option<u64>,
+    max: Option<u64>,
+}
+
+/// 一个自然月内「有记录的天 → 次数」，key 升序。规模只与当月有记录的天数成正比。
 /// `Clone` 是 `Arc::make_mut`（save_time 增量维护）的前提。
 #[derive(Clone, Default)]
 pub struct DayCounts {
-    days: BTreeMap<NaiveDate, DayStat>,
+    days: BTreeMap<NaiveDate, usize>,
 }
 
 impl DayCounts {
-    fn from_rows(rows: impl IntoIterator<Item = (NaiveDate, usize, u64)>) -> Self {
+    fn from_rows(rows: impl IntoIterator<Item = (NaiveDate, usize)>) -> Self {
         Self {
-            days: rows
-                .into_iter()
-                .map(|(day, count, last)| (day, DayStat { count, last }))
-                .collect(),
+            days: rows.into_iter().collect(),
         }
     }
 
     /// 某天喝了多少次。
     pub fn count(&self, day: NaiveDate) -> usize {
-        self.days.get(&day).map_or(0, |stat| stat.count)
+        self.days.get(&day).copied().unwrap_or(0)
     }
 
-    /// 最早有记录的那一天。
-    pub fn earliest_day(&self) -> Option<NaiveDate> {
-        self.days.keys().next().copied()
-    }
-
-    /// 全部记录中最近的一次。key 升序、且每天存的是当日最大值，所以最后一个分组即全局最近。
-    pub fn last_time(&self) -> Option<u64> {
-        self.days.values().next_back().map(|stat| stat.last)
-    }
-
-    /// 记一次新喝水：只动这一天的两个数字，不碰明细。
+    /// 记一次新喝水：只动这一天的计数。
     fn record(&mut self, timestamp: u64) {
-        self.days
-            .entry(local_date(timestamp))
-            .and_modify(|stat| {
-                stat.count += 1;
-                stat.last = stat.last.max(timestamp);
-            })
-            .or_insert(DayStat {
-                count: 1,
-                last: timestamp,
-            });
+        *self.days.entry(local_date(timestamp)).or_insert(0) += 1;
     }
 }
 
@@ -134,45 +120,84 @@ fn get_conn() -> Option<PooledConnection<SqliteConnectionManager>> {
     db_pool().get().ok()
 }
 
-/// 唯一一次全量读库：交给 SQLite 按本地日期聚合，只回「天 / 次数 / 当天最后一次」，不回明细。
-/// 一天一行，因此结果与明细行数无关——这正是日历只需要条数的原因。
-fn query_day_counts() -> Vec<(NaiveDate, usize, u64)> {
+/// 单个自然月的日级聚合：一天一行，与明细行数无关。优先按本地零点区间过滤，
+/// 命中 `idx_timestamp` 做索引范围扫描；只有本地零点不存在的时区（DST 跳过零点）才退回按月字符串过滤。
+fn query_month_counts(month: NaiveDate) -> Vec<(NaiveDate, usize)> {
     let Some(conn) = get_conn() else {
         return Vec::new();
     };
+    let Some(next_month) = month.checked_add_months(Months::new(1)) else {
+        return Vec::new();
+    };
 
-    let mut stmt = match conn.prepare(
+    let (condition, bound): (&str, Vec<Value>) =
+        match (day_bounds(month), day_bounds(next_month)) {
+            (Some((start, _)), Some((end, _))) => (
+                "timestamp >= ?1 AND timestamp < ?2",
+                vec![Value::Integer(start as i64), Value::Integer(end as i64)],
+            ),
+            _ => (
+                "strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') = ?1",
+                vec![Value::Text(month.format("%Y-%m").to_string())],
+            ),
+        };
+
+    let sql = format!(
         "SELECT date(timestamp, 'unixepoch', 'localtime') AS day,
-                COUNT(*),
-                MAX(timestamp)
+                COUNT(*)
          FROM drink_records
+         WHERE {condition}
          GROUP BY day
-         ORDER BY day ASC",
-    ) {
+         ORDER BY day ASC"
+    );
+
+    let mut stmt = match conn.prepare(&sql) {
         Ok(stmt) => stmt,
         Err(_) => return Vec::new(),
     };
 
-    let rows = match stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
-        ))
+    let rows = match stmt.query_map(params_from_iter(bound), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     }) {
         Ok(rows) => rows,
         Err(_) => return Vec::new(),
     };
 
     rows.filter_map(|row| row.ok())
-        .filter_map(|(day, count, last)| {
+        .filter_map(|(day, count)| {
             Some((
                 NaiveDate::parse_from_str(&day, "%Y-%m-%d").ok()?,
                 count.max(0) as usize,
-                last.max(0) as u64,
             ))
         })
         .collect()
+}
+
+/// 全局时间戳范围。走 `idx_timestamp` 索引的 MIN/MAX，代价与记录数无关。
+fn query_bounds() -> Bounds {
+    let empty = Bounds {
+        min: None,
+        max: None,
+    };
+    let Some(conn) = get_conn() else {
+        return empty;
+    };
+    let mut stmt = match conn.prepare("SELECT MIN(timestamp), MAX(timestamp) FROM drink_records") {
+        Ok(stmt) => stmt,
+        Err(_) => return empty,
+    };
+    match stmt.query_row([], |row| {
+        Ok((
+            row.get::<_, Option<i64>>(0)?,
+            row.get::<_, Option<i64>>(1)?,
+        ))
+    }) {
+        Ok((min, max)) => Bounds {
+            min: min.map(|value| value.max(0) as u64),
+            max: max.map(|value| value.max(0) as u64),
+        },
+        Err(_) => empty,
+    }
 }
 
 /// 取某天的全部明细（升序）。按本地日的秒区间过滤，命中 idx_timestamp 做索引查找；
@@ -213,23 +238,26 @@ fn query_day(day: NaiveDate) -> Vec<u64> {
         .collect()
 }
 
-/// 天级聚合缓存。首次调用时做唯一一次聚合查询，之后永远命中内存。
-pub fn day_counts() -> Arc<DayCounts> {
-    if let Some(counts) = counts_slot().read().unwrap().as_ref() {
+/// 某个月（传入该月任意一天）的天级聚合。首次访问该月时按索引区间查一次库，
+/// 之后（含空月）永久命中内存 —— 日历切月因此只在首次产生一次 SELECT。
+pub fn month_counts(day_in_month: NaiveDate) -> Arc<DayCounts> {
+    let month = day_in_month.with_day(1).unwrap_or(day_in_month);
+    if let Some(counts) = months_slot().read().unwrap().get(&month).cloned() {
+        return counts;
+    }
+
+    let mut slot = months_slot().write().unwrap();
+    if let Some(counts) = slot.get(&month) {
         return counts.clone();
     }
-
-    // 首帧之前先在写锁内完成加载，保证全进程只产生这一次 SELECT。
-    let mut slot = counts_slot().write().unwrap();
-    if slot.is_none() {
-        *slot = Some(Arc::new(DayCounts::from_rows(query_day_counts())));
-    }
-    slot.as_ref().unwrap().clone()
+    let counts = Arc::new(DayCounts::from_rows(query_month_counts(month)));
+    slot.insert(month, counts.clone());
+    counts
 }
 
-/// 某天的明细。次数为 0 直接返回空、不查库；查过一次后就命中缓存。
+/// 某天的明细。该天次数为 0 直接返回空、不查库；查过一次后就命中缓存。
 pub fn day_detail(day: NaiveDate) -> Arc<Vec<u64>> {
-    if day_counts().count(day) == 0 {
+    if month_counts(day).count(day) == 0 {
         return Arc::default();
     }
 
@@ -247,12 +275,30 @@ pub fn day_detail(day: NaiveDate) -> Arc<Vec<u64>> {
     times
 }
 
-/// 全部记录中最近的一次喝水时间戳。
-pub fn last_time() -> Option<u64> {
-    day_counts().last_time()
+/// 全局时间戳范围。首次调用做一次索引 MIN/MAX 查询，之后命中内存。
+fn bounds() -> Bounds {
+    if let Some(bounds) = *bounds_slot().read().unwrap() {
+        return bounds;
+    }
+
+    let mut slot = bounds_slot().write().unwrap();
+    if slot.is_none() {
+        *slot = Some(query_bounds());
+    }
+    (*slot).unwrap()
 }
 
-/// 最近一次喝水距今的秒数。直接从聚合缓存取，不需要明细。
+/// 全部记录中最近的一次喝水时间戳。
+pub fn last_time() -> Option<u64> {
+    bounds().max
+}
+
+/// 最早有记录的那一天。
+pub fn earliest_day() -> Option<NaiveDate> {
+    bounds().min.map(local_date)
+}
+
+/// 最近一次喝水距今的秒数。直接从全局极值取，不需要明细。
 pub fn get_elapsed() -> Option<u64> {
     last_time().map(|time| now().saturating_sub(time))
 }
@@ -275,13 +321,21 @@ pub fn save_time() {
         return;
     }
 
-    // 天级：改动这一天的两个数字即可。缓存尚未建立时无需处理：之后的聚合查询会包含这条记录。
-    if let Some(counts) = counts_slot().write().unwrap().as_mut() {
+    let day = local_date(timestamp);
+    let month = day.with_day(1).unwrap_or(day);
+
+    // 天级：只在该月已加载时增量更新；未加载则留待首次访问时一次查回（已含这条记录）。
+    if let Some(counts) = months_slot().write().unwrap().get_mut(&month) {
         Arc::make_mut(counts).record(timestamp);
     }
 
-    // 明细：只在那天的明细已经加载过时才追加，否则留到点击时一次查回（不做任何 「顺带加载」）。
-    let day = local_date(timestamp);
+    // 全局极值：已加载时增量更新；未加载则留待首次查询（那次查询会包含这条记录）。
+    if let Some(bounds) = bounds_slot().write().unwrap().as_mut() {
+        bounds.min = Some(bounds.min.map_or(timestamp, |min| min.min(timestamp)));
+        bounds.max = Some(bounds.max.map_or(timestamp, |max| max.max(timestamp)));
+    }
+
+    // 明细：只在那天的明细已经加载过时才追加，否则留到点击时一次查回（不做任何「顺带加载」）。
     if let Some(times) = details_slot().write().unwrap().get_mut(&day) {
         let times = Arc::make_mut(times);
         match times.last() {

@@ -1,7 +1,7 @@
 use crate::{
     core::{
         config::{Store, WindowState, save_store},
-        data::{DayCounts, day_counts, day_detail},
+        data::{DayCounts, day_detail, earliest_day, month_counts},
         scheduler::SchedulerCmd,
     },
     ui::{
@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex, mpsc};
 struct RenderInput {
     today: NaiveDate,
     selected: NaiveDate,
-    /// 天级聚合：日历上色只需要每天的次数。
+    /// 全局最早有记录的日期，用于左箭头下界（与按月聚合解耦）。
+    earliest: Option<NaiveDate>,
+    /// 当前展示月份的日级聚合：日历上色只需要当月每天的次数。
     counts: Arc<DayCounts>,
     /// 选中那天的明细，懒加载的结果（次数为 0 时为空）。
     detail: Arc<Vec<u64>>,
@@ -49,10 +51,7 @@ impl MainWindow {
         // 周一为每周首列：0 = 周一。
         let leading = month.weekday().num_days_from_monday() as u32;
         // 左箭头：逐月后退，退到最早有记录的月份为止，再往前则置灰。
-        let earliest_month = input
-            .counts
-            .earliest_day()
-            .map(|day| day.with_day(1).unwrap_or(day));
+        let earliest_month = input.earliest.map(|day| day.with_day(1).unwrap_or(day));
         let prev_month = match earliest_month {
             Some(earliest) if month > earliest => Some(shift_month(month, -1)),
             _ => None,
@@ -261,7 +260,8 @@ impl Render for MainWindow {
         let input = RenderInput {
             today: local_date(now()),
             selected: self.selected_date,
-            counts: day_counts(),
+            earliest: earliest_day(),
+            counts: month_counts(self.view_month),
             detail: day_detail(self.selected_date),
         };
         let calendar = self.calendar(&input, cx);

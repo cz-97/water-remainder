@@ -141,6 +141,7 @@ impl MainWindow {
                     .flex()
                     .flex_col()
                     .items_center()
+                    .gap_2()
                     .child(weekday_header)
                     .child(grid),
             )

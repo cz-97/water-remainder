@@ -4,7 +4,7 @@ mod core;
 mod platform;
 mod ui;
 
-use core::config::load_store;
+use core::config::{Store, load_store};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
 use gpui_kit::App;
@@ -105,7 +105,7 @@ fn main() {
                             }
                         }
                         AppEvent::Alarm(SchedulerEvent::Remind { remaining }) => {
-                            show_reminder(cx, scheduler_tx.clone(), remaining);
+                            show_reminder(cx, scheduler_tx.clone(), shared_store.clone(), remaining);
                         }
                     }
                 }
@@ -117,7 +117,8 @@ fn main() {
 fn show_reminder(
     cx: &mut gpui_kit::AsyncApp,
     scheduler: mpsc::Sender<SchedulerCmd>,
+    store: Arc<Mutex<Store>>,
     remaining: u64,
 ) {
-    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
+    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, store, remaining));
 }

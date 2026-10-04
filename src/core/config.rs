@@ -29,6 +29,7 @@ pub const INTERVALS: &[u64] = &[
 pub struct Settings {
     pub interval_secs: u64,
     pub autostart: bool,
+    pub show_image: bool,
 }
 
 impl Default for Settings {
@@ -36,6 +37,7 @@ impl Default for Settings {
         Self {
             interval_secs: DEFAULT_INTERVAL,
             autostart: false,
+            show_image: true,
         }
     }
 }
@@ -62,6 +64,7 @@ pub fn load_store() -> Store {
         settings: Settings {
             interval_secs: DEFAULT_INTERVAL,
             autostart: false,
+            show_image: true,
         },
         window_state: None,
     };
@@ -73,6 +76,7 @@ pub fn load_store() -> Store {
                     s.settings.interval_secs = v.parse().unwrap_or(DEFAULT_INTERVAL)
                 }
                 (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
+                (Some("show_image"), Some(v)) => s.settings.show_image = v == "true",
                 (Some("window_x"), Some(v)) => {
                     s.window_state.get_or_insert_with(default_window_state).x =
                         v.parse().unwrap_or(0.)
@@ -108,8 +112,8 @@ pub fn save_store(s: &Store) {
         let _ = fs::create_dir_all(d);
     }
     let mut out = format!(
-        "interval={}\nautostart={}\n",
-        s.settings.interval_secs, s.settings.autostart
+        "interval={}\nautostart={}\nshow_image={}\n",
+        s.settings.interval_secs, s.settings.autostart, s.settings.show_image
     );
     if let Some(w) = s.window_state {
         out.push_str(&format!(

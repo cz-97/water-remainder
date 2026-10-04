@@ -1,5 +1,6 @@
 use crate::{
     core::{
+        config::Store,
         data::{last_time, save_time},
         scheduler::{RescheduleType, SchedulerCmd},
     },
@@ -9,8 +10,12 @@ use gpui_kit::{
     App, Context, FontWeight, Image, ImageFormat, MouseButton, Rems, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, prelude::*, rgb,
 };
-use std::{sync::mpsc, time::Duration};
+use std::{
+    sync::{Arc, Mutex, mpsc},
+    time::Duration,
+};
 pub struct ReminderWindow {
+    store: Arc<Mutex<Store>>,
     scheduler: mpsc::Sender<SchedulerCmd>,
     /// 最近一次喝水的时间戳（Unix 秒）。
     last_drink: Option<u64>,
@@ -79,7 +84,7 @@ impl Render for ReminderWindow {
                 MouseButton::Left,
                 cx.listener(|_, _, w, _| w.remove_window()),
             );
-        div()
+        let mut overlay = div()
             .flex()
             .flex_col()
             .size_full()
@@ -101,18 +106,30 @@ impl Render for ReminderWindow {
                     .text_color(rgb(palette::TEXT_SOFT))
                     .text_size(Rems(1.05))
                     .child(status),
-            )
-            .child(
+            );
+        if self
+            .store
+            .lock()
+            .map(|store| store.settings.show_image)
+            .unwrap_or(true)
+        {
+            overlay = overlay.child(
                 img(std::sync::Arc::new(Image::from_bytes(
                     ImageFormat::Png,
                     include_bytes!("../assets/water.png").to_vec(),
                 )))
                 .size_128(),
-            )
-            .child(div().flex().gap_12().mt_4().child(drink).child(skip))
+            );
+        }
+        overlay.child(div().flex().gap_12().mt_4().child(drink).child(skip))
     }
 }
-pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remaining: u64) {
+pub fn open_reminder_window(
+    cx: &mut App,
+    tx: mpsc::Sender<SchedulerCmd>,
+    store: Arc<Mutex<Store>>,
+    remaining: u64,
+) {
     let last_drink = last_time();
     let next_reminder = now() + remaining;
 
@@ -166,6 +183,7 @@ pub fn open_reminder_window(cx: &mut App, tx: mpsc::Sender<SchedulerCmd>, remain
                     .detach();
 
                     ReminderWindow {
+                        store,
                         scheduler: tx,
                         last_drink,
                         next_reminder,

@@ -105,6 +105,29 @@ impl Render for SettingsWindow {
             .child(setting_copy("提醒间隔", "两次提醒之间的等待时间"))
             .child(interval);
 
+        let store = self.store.clone();
+        let show_image = div()
+            .id("show-image-setting")
+            .flex()
+            .items_center()
+            .justify_between()
+            .px_4()
+            .py_3()
+            .rounded_md()
+            .hover(|s| s.bg(rgb(palette::ROW_HOVER)))
+            .cursor_pointer()
+            .child(setting_copy("提醒图片", "提醒浮层中央是否显示喝水插图"))
+            .child(switch(settings.show_image))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _, _, cx| {
+                    update_settings(&store, |settings| {
+                        settings.show_image = !settings.show_image;
+                    });
+                    cx.notify();
+                }),
+            );
+
         let title_bar = titlebar("设置", window_button("\u{e8bb}", WindowControlArea::Close));
 
         div()
@@ -129,6 +152,7 @@ impl Render for SettingsWindow {
                             .child("提醒"),
                     )
                     .child(interval_row)
+                    .child(show_image)
                     .child(div().h(px(12.)))
                     .child(
                         div()

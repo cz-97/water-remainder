@@ -53,8 +53,8 @@ pub enum Theme {
 }
 
 impl Theme {
-    /// 可作为选项展示的全部取值，顺序即界面上的顺序。
-    pub const ALL: [Theme; 3] = [Theme::System, Theme::Light, Theme::Dark];
+    /// 设置窗里作为**预览卡片**展示的两个取值（跟随系统是开关，不是卡片）。
+    pub const CHOICES: [Theme; 2] = [Theme::Light, Theme::Dark];
 
     /// 落盘用的字面量。
     pub fn as_key(self) -> &'static str {
@@ -390,7 +390,8 @@ mod tests {
 
     #[test]
     fn theme_round_trips_through_its_key() {
-        for theme in Theme::ALL {
+        // 三个取值都要能往返：System 走开关，另两个走预览卡片，一个都不能漏。
+        for theme in [Theme::System, Theme::Light, Theme::Dark] {
             assert_eq!(Theme::from_key(theme.as_key()), Some(theme));
             let store = parse_store(&format!("theme={}", theme.as_key()));
             assert_eq!(store.settings.theme, theme);
@@ -443,16 +444,26 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    /// 三个选项都必须有名字，且没有重复（顺序即界面顺序）。
+    /// 每个主题都要有名字，且没有重复。`System` 的名字正是设置窗开关上的那四个字。
     #[test]
     fn every_theme_has_a_distinct_label() {
-        let labels: Vec<&str> = Theme::ALL.iter().map(|t| t.label()).collect();
+        let labels: Vec<&str> = [Theme::System, Theme::Light, Theme::Dark]
+            .iter()
+            .map(|t| t.label())
+            .collect();
         assert_eq!(labels.len(), 3);
         for (i, a) in labels.iter().enumerate() {
             for b in &labels[i + 1..] {
                 assert_ne!(a, b, "选项名称不能重复");
             }
         }
+        assert_eq!(Theme::System.label(), "跟随系统");
+        // `CHOICES` 是设置窗实际画成预览卡片的那两个，不能把 System 混进去。
+        assert!(
+            Theme::CHOICES.iter().all(|t| *t != Theme::System),
+            "跟随系统是开关，不该出现在预览卡片列表里"
+        );
+        assert_eq!(Theme::CHOICES.len(), 2);
     }
 
     #[test]

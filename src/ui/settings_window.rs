@@ -8,8 +8,8 @@ use crate::{
     ui::{image_format, palette, titlebar, window_button},
 };
 use gpui_kit::{
-    App, Context, Image, ImageFormat, MouseButton, ObjectFit, Window, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, div, img, prelude::*, px, rgb, size,
+    App, Context, MouseButton, Window, WindowBounds, WindowControlArea, WindowKind, WindowOptions,
+    div, prelude::*, px, rgb, size,
 };
 use std::{
     fs,
@@ -18,10 +18,10 @@ use std::{
 
 /// 设置窗的固定尺寸。窗口不可缩放，所以高度必须自己装得下全部内容：
 /// 标题栏 38，上下内边距 40，三个分组标题 28×3，三行设置 74×3，
-/// 两处分组间距 12×2，「主题」标题 20，主题卡片 94，再加上元素间距，合计约 538。
-/// 取 600 留出余量，以后主题卡片里加内容也不会把底部顶破。
+/// 两处分组间距 12×2，「主题」标题 20，主题预览 50，再加上元素间距，合计约 494。
+/// 高度随内容增减 —— 预览卡去掉下面的文字后，这里跟着从 600 降回 540。
 const SETTINGS_WIDTH: f32 = 520.;
-const SETTINGS_HEIGHT: f32 = 600.;
+const SETTINGS_HEIGHT: f32 = 540.;
 
 pub struct SettingsWindow {
     store: Arc<Mutex<Store>>,
@@ -262,53 +262,76 @@ impl Render for SettingsWindow {
     }
 }
 
-/// 三张主题预览卡片。返回一整行，卡片本身负责响应点击。
+/// 主题选择区：左侧「跟随系统」开关，右侧浅色 / 深色两张预览。
+///
+/// 「跟随系统」是**开关**而不是第三张预览 —— 它的含义是「别管我，听系统的」，
+/// 画成一张具体配色反而会误导（它并不是第三种外观）。开关打开时两张预览
+/// **都不选中**（此刻由系统决定用哪张）；关掉并手动点了某一张，那张才描边点亮。
 fn theme_row(store: Arc<Mutex<Store>>, cx: &mut Context<SettingsWindow>) -> impl IntoElement {
-    let row = div().flex().gap_2();
-    // 折叠成 `impl IntoElement` 需要一个确定的类型，所以先把卡片收集起来再渲染。
-    let mut row = row;
-    for theme in Theme::ALL {
-        row = row.child(theme_card(theme, &store, cx));
+    let theme = settings_snapshot(&store).theme;
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap_4()
+        .child(follow_system_switch(theme, &store, cx));
+    // 折叠成 `impl IntoElement` 需要一个确定类型，所以先建好左侧再依次追加卡片。
+    for choice in Theme::CHOICES {
+        row = row.child(theme_card(choice, theme, &store, cx));
     }
     row
 }
 
-/// 单张主题卡片：上方一个迷你窗口预览，下方是名称 + 选中角标。
-fn theme_card(
-    theme: Theme,
+/// 「跟随系统」开关。开着等价于 Theme::System。
+fn follow_system_switch(
+    current: Theme,
     store: &Arc<Mutex<Store>>,
     cx: &mut Context<SettingsWindow>,
 ) -> impl IntoElement {
-    let selected = settings_snapshot(store).theme == theme;
     let store = store.clone();
-    // 预览怎么画：
-    // - 浅色 / 深色 —— 直接用那套配色画一整张迷你窗口（标题栏 + 内容）。
-    // - 跟随系统 —— 它既不是纯浅也不是纯深，而是一张**左上到右下对角线分割**的图，
-    //   一眼就知道「会跟着系统变」。因为 gpui 没有 clip-path / 旋转，这里用一小张
-    //   SVG（`ImageFormat::Svg` 是 gpui 原生支持的）来画三角分割，不依赖任何 transform。
-    let preview: Option<Vec<u8>> = match theme {
-        Theme::System => Some(diagonal_svg()),
-        _ => None,
-    };
-    let preview_palette = palette::for_preview(match theme {
-        Theme::System => palette::is_light(),
-        Theme::Light => true,
-        Theme::Dark => false,
-    });
-
-    let badge = div()
-        .w(px(9.))
-        .h(px(9.))
-        .rounded_full()
-        .bg(rgb(palette::WHITE));
-
-    let card = div()
+    div()
         .flex()
-        .flex_1()
-        .flex_col()
+        .items_center()
         .gap_2()
-        .p_2()
-        .rounded_lg()
+        .cursor_pointer()
+        // 开关上只写「跟随系统」四个字：右边两张预览已经自带深浅信息，
+        // 开关的职责只是「听不听系统的」，不需要再画一张预览图。
+        .child(
+            div()
+                .text_color(rgb(palette::current().text))
+                .child(Theme::System.label()),
+        )
+        .child(switch(current == Theme::System))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                // 关掉时落到「系统当前实际是深还是浅」那一张，界面上立刻有实感。
+                apply_theme(
+                    toggled_follow(current, palette::is_light()),
+                    &store,
+                    this,
+                    cx,
+                );
+            }),
+        )
+}
+
+/// 单张预览卡。只有真正选中（手动选中且与当前一致）时才描边点亮。
+/// 卡片**只有预览、没有文字** —— 深浅本身画得清清楚楚，再配一行字是冗余。
+fn theme_card(
+    theme: Theme,
+    current: Theme,
+    store: &Arc<Mutex<Store>>,
+    cx: &mut Context<SettingsWindow>,
+) -> impl IntoElement {
+    let selected = preview_is_selected(current, theme);
+    let store = store.clone();
+    let preview = palette::for_preview(theme == Theme::Light);
+
+    div()
+        .flex_1()
+        .h(px(46.))
+        .w_full()
+        .rounded_md()
         .overflow_hidden()
         .border_2()
         .border_color(rgb(if selected {
@@ -316,122 +339,113 @@ fn theme_card(
         } else {
             palette::current().step_bg
         }))
-        .bg(rgb(palette::current().step_bg))
         .cursor_pointer()
         // 悬浮时把未选中的描边提亮一点，给出「可以点」的暗示。
         .when(!selected, |this| {
             this.hover(|s| s.border_color(rgb(palette::current().row_hover)))
         })
-        .child(theme_swatch(preview, preview_palette))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(div().text_sm().child(theme.label()))
-                // 选中角标紧挨文字，占位固定，不让选中/未选中导致文字左右跳动。
-                .child(
-                    div()
-                        .w(px(9.))
-                        .h(px(9.))
-                        .when(selected, |this| this.child(badge)),
-                ),
-        );
-
-    card.on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |this, _, _, cx| {
-            match update_settings(&store, |settings| settings.theme = theme) {
-                Ok(()) => {
-                    // 立即生效：把新主题写进全局并让所有窗口重绘，主窗/浮层立刻跟着变。
-                    palette::set_preference(theme);
-                    cx.refresh_windows();
-                    this.save_error = None;
-                }
-                Err(error) => this.save_error = Some(error.to_string()),
-            }
-            cx.notify();
-        }),
-    )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                apply_theme(theme, &store, this, cx);
+            }),
+        )
+        .child(theme_swatch(preview))
 }
 
 /// 迷你窗口预览：一条标题栏 + 两条内容横杠 + 一个小色块，用对应主题的配色画。
-/// `svg` 非空时（跟随系统那张）改画对角分割的 SVG，其余画纯色迷你窗口。
-fn theme_swatch(svg: Option<Vec<u8>>, preview: &palette::Palette) -> impl IntoElement {
-    // 外层固定成一个 Div（`absolute` 不需要），跟随系统那张直接把 SVG 铺满，
-    // 浅色/深色那张画迷你窗口。两个分支都产出一个 Div，类型天然一致。
-    let content = match svg {
-        Some(bytes) => img(Arc::new(Image::from_bytes(ImageFormat::Svg, bytes)))
-            .w_full()
-            .h(px(46.))
-            .object_fit(ObjectFit::Fill)
-            .into_any_element(),
-        None => div()
-            .h(px(46.))
-            .w_full()
-            .rounded_md()
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .bg(rgb(preview.window_bg))
-            // 标题栏
-            .child(div().h(px(10.)).w_full().bg(rgb(preview.titlebar_bg)))
-            // 内容：一个小方块 + 两条横杠，暗示主界面布局
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .child(
-                        div()
-                            .w(px(10.))
-                            .h(px(10.))
-                            .rounded_sm()
-                            .bg(rgb(preview.accent)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .h(px(3.))
-                                    .w(px(38.))
-                                    .rounded_full()
-                                    .bg(rgb(preview.text)),
-                            )
-                            .child(
-                                div()
-                                    .h(px(3.))
-                                    .w(px(26.))
-                                    .rounded_full()
-                                    .bg(rgb(preview.text_muted)),
-                            ),
-                    ),
-            )
-            .into_any_element(),
-    };
-    div().w_full().child(content)
+/// 四角圆角由外层卡片的圆角加裁剪裁出来。
+fn theme_swatch(preview: &palette::Palette) -> impl IntoElement {
+    div()
+        .h(px(46.))
+        .w_full()
+        .flex()
+        .flex_col()
+        .bg(rgb(preview.window_bg))
+        // 标题栏
+        .child(div().h(px(10.)).w_full().bg(rgb(preview.titlebar_bg)))
+        // 内容：一个小方块 + 两条横杠，暗示主界面布局
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .rounded_sm()
+                        .bg(rgb(preview.accent)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .flex_1()
+                        .child(
+                            div()
+                                .h(px(3.))
+                                .w(px(38.))
+                                .rounded_full()
+                                .bg(rgb(preview.text)),
+                        )
+                        .child(
+                            div()
+                                .h(px(3.))
+                                .w(px(26.))
+                                .rounded_full()
+                                .bg(rgb(preview.text_muted)),
+                        ),
+                ),
+        )
 }
 
-/// 「跟随系统」预览用的对角分割 SVG：左上到右下，左上三角浅色、其余深色。
-/// 颜色取自浅/深两套 `window_bg`，系统切深浅时这张图也跟着换。
-fn diagonal_svg() -> Vec<u8> {
-    let light = format!("{:06x}", palette::for_preview(true).window_bg);
-    let dark = format!("{:06x}", palette::for_preview(false).window_bg);
-    let mut svg = String::with_capacity(200);
-    svg.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">"#);
-    svg.push_str(r#"<rect width="100" height="50" fill=""#);
-    svg.push_str(&dark);
-    svg.push_str(r#""/>"#);
-    svg.push_str(r#"<polygon points="0,0 100,0 0,50" fill=""#);
-    svg.push_str(&light);
-    svg.push_str(r#""/></svg>"#);
-    svg.into_bytes()
+/// 改主题：先落盘，成功后写全局配色并让所有窗口重绘；失败交给 save_error 提示条。
+fn apply_theme(
+    theme: Theme,
+    store: &Arc<Mutex<Store>>,
+    view: &mut SettingsWindow,
+    cx: &mut Context<SettingsWindow>,
+) {
+    match update_settings(store, |settings| settings.theme = theme) {
+        Ok(()) => {
+            palette::set_preference(theme);
+            cx.refresh_windows();
+            view.save_error = None;
+        }
+        Err(error) => view.save_error = Some(error.to_string()),
+    }
+    cx.notify();
+}
+
+/// 点「跟随系统」开关之后会变成哪个主题。
+///
+/// 开关开着 ⇔ 跟随系统，所以关掉它就得落到一个**具体**的深/浅上；选哪个取
+/// 「系统此刻实际是深是浅」，而不是「上次手动选的那个」—— 用户点这个开关的意图
+/// 是「别跟随」，此刻眼睛看到的正是系统实际外观。抽成纯函数是为了能测。
+fn toggled_follow(current: Theme, system_is_light: bool) -> Theme {
+    match current {
+        Theme::System => {
+            if system_is_light {
+                Theme::Light
+            } else {
+                Theme::Dark
+            }
+        }
+        // 已经手动选过了，再点一次就是恢复跟随。
+        _ => Theme::System,
+    }
+}
+
+/// 单张预览是否应当描边点亮。
+///
+/// 跟随系统时**两张都不选中**：此刻由系统决定用哪张，圈住其中任何一张都是在撒谎
+/// （界面说「你选的是深色」，实际可能是浅色）。跟着系统的语义只由开关表示。
+fn preview_is_selected(current: Theme, card: Theme) -> bool {
+    current == card
 }
 
 fn setting_copy(title: &'static str, description: &'static str) -> impl IntoElement {
@@ -600,48 +614,64 @@ pub fn close_settings_window(cx: &mut App) {
 mod tests {
     use super::*;
 
-    /// 「跟随系统」那张预览要是一条**左上到右下**的对角分割：深色打底，
-    /// 左上三角浅色。三角形顶点必须是 (0,0)/(W,0)/(0,H) —— 换任何一个角
-    /// 就变成了另外三种对角线之一，语义就错了。
+    /// 点「跟随系统」开关之后会变成哪个主题。
+    ///
+    /// 开关开着 ⇔ 跟随系统，所以关掉它就得落到一个**具体**的深/浅上；选哪个
+    /// 取「系统此刻实际是深是浅」，而不是「上次手动选的那个」—— 用户点这个开关
+    /// 的意图是「别跟随」，此刻眼睛看到的正是系统实际外观。抽成纯函数是为了能测。
     #[test]
-    fn follow_system_swatch_splits_top_left_to_bottom_right() {
-        let svg = String::from_utf8(diagonal_svg()).expect("SVG 应是 UTF-8");
-        assert!(svg.starts_with("<svg "), "缺少根元素：{svg}");
-        assert!(svg.ends_with("</svg>"), "根元素未闭合：{svg}");
-        assert!(
-            svg.contains(r#"points="0,0 100,0 0,50""#),
-            "浅色三角应是左上角那个（0,0 / 100,0 / 0,50）：{svg}"
-        );
-        // 两处 fill 都必须是 # 加 6 位十六进制，否则 SVG 解析器会忽略整个属性。
-        for part in svg.split("fill=\"#").skip(1) {
-            let color: String = part.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-            assert_eq!(color.len(), 6, "颜色必须是 6 位十六进制：{part}");
+    fn toggling_follow_lands_on_the_system_current_look() {
+        assert_eq!(toggled_follow(Theme::System, true), Theme::Light);
+        assert_eq!(toggled_follow(Theme::System, false), Theme::Dark);
+        // 已经手动选过了，再点一次就是恢复跟随。
+        assert_eq!(toggled_follow(Theme::Light, false), Theme::System);
+        assert_eq!(toggled_follow(Theme::Dark, true), Theme::System);
+    }
+
+    /// 跟随系统时**两张预览都不选中**：此刻由系统决定用哪张，圈住其中任何一张
+    /// 都是在撒谎。跟着系统的语义只由左边那个开关表示。
+    #[test]
+    fn no_preview_is_highlighted_while_following_the_system() {
+        for system_is_light in [true, false] {
+            assert!(!preview_is_selected(Theme::System, Theme::Light));
+            assert!(!preview_is_selected(Theme::System, Theme::Dark));
+            let _ = system_is_light;
         }
     }
 
-    /// 设置窗不可缩放，高度必须自己装得下全部内容；主题卡片那一行是后来加的，
-    /// 固定高度如果忘了跟着调，底部的主题卡片就会被裁掉。
+    /// 手动选中时，只有对应那张点亮。
+    #[test]
+    fn the_manually_chosen_preview_is_highlighted() {
+        assert!(preview_is_selected(Theme::Light, Theme::Light));
+        assert!(!preview_is_selected(Theme::Light, Theme::Dark));
+        assert!(preview_is_selected(Theme::Dark, Theme::Dark));
+        assert!(!preview_is_selected(Theme::Dark, Theme::Light));
+    }
+
+    /// 设置窗不可缩放，高度必须自己装得下全部内容；主题那一行是后来加的，
+    /// 固定高度如果忘了跟着调，底部就会被裁掉。
     ///
     /// 断言的是「两个常量之间的关系」，编译器能在编译期判定其真伪，因此
     /// clippy 会报 `assertions_on_constants`。这里**刻意保留**：它是一份可执行的
     /// 布局记账 —— 以后有人加了设置项却忘了调 `SETTINGS_HEIGHT`，测试就会失败。
     #[test]
     #[allow(clippy::assertions_on_constants)]
-    fn settings_window_is_tall_enough_for_the_theme_cards() {
+    fn settings_window_is_tall_enough_for_its_content() {
         // 按当前各元素真实高度求和：标题栏 + 上下内边距 + 三个分组标题
-        // + 三行设置 + 两处分组间距 + 「主题」标题 + 主题卡片 + 元素间距。
-        let content = 38. + 2. * 20. + 3. * 28. + 3. * 74. + 2. * 12. + 20. + 94.;
+        // + 三行设置 + 两处分组间距 + 「主题」标题 + 主题预览(46 + 2px 描边)
+        // + 元素间距。
+        let content = 38. + 2. * 20. + 3. * 28. + 3. * 74. + 2. * 12. + 20. + 50.;
         assert!(
             SETTINGS_HEIGHT >= content,
-            "窗口高 {} 装不下约 {} 的内容，主题卡片会被裁掉",
+            "窗口高 {} 装不下约 {} 的内容，主题预览会被裁掉",
             SETTINGS_HEIGHT,
             content
         );
-        // 三张主题卡片是 flex_1 均分：520 减去左右内边距 40 与两处间隙 16，
-        // 每张约 155px，够放下缩略图和四个字；再窄标签就会换行。
+        // 左边是「跟随系统」开关，右边两张预览 flex_1 均分：520 减去左右内边距 40、
+        // 开关与其文字约 90、两处间隙 32，每张还剩约 180px，够画一张像样的缩略图。
         assert!(
             SETTINGS_WIDTH >= 480.,
-            "窗口宽 {} 放不下三张主题卡片",
+            "窗口宽 {} 放不下「跟随系统」开关和两张预览",
             SETTINGS_WIDTH
         );
     }

@@ -217,8 +217,12 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
 const TITLEBAR_HEIGHT: f32 = 38.;
 /// 标题栏按钮宽度：窗口控制键与功能键统一 46px。
 const TITLEBAR_BUTTON_WIDTH: f32 = 46.;
-/// 标题栏图标字体（Windows 自带）。
+/// 标题栏图标字体。`Segoe Fluent Icons` 是 Win11 的图标字体，Win10 只有
+/// `Segoe MDL2 Assets`；两者覆盖本项目用到的码位（设置 `E713`、最小化 `E921`、
+/// 最大化 `E922`、还原 `E923`、关闭 `E8BB` —— 已逐个比对过两张字体表）。
+/// 所以把 MDL2 作为回退字体，缺少 Fluent 的机器上就不会渲染成方块。
 const ICON_FONT: &str = "Segoe Fluent Icons";
+const ICON_FONT_FALLBACK: &str = "Segoe MDL2 Assets";
 /// 窗口控制键（最小化 / 最大化 / 关闭）的图标字号。
 const WINDOW_ICON_SIZE: f32 = 12.;
 /// 标题栏功能键（设置）的图标字号。
@@ -266,7 +270,14 @@ pub fn titlebar_button(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .font_family(ICON_FONT)
+        .font(gpui_kit::Font {
+            family: ICON_FONT.into(),
+            // 回退链：Win10 没有 Fluent 图标字体，缺了它这几个码位会画成方块。
+            fallbacks: Some(gpui_kit::FontFallbacks::from_fonts(vec![
+                ICON_FONT_FALLBACK.to_string(),
+            ])),
+            ..Default::default()
+        })
         .w(px(TITLEBAR_BUTTON_WIDTH))
         .h(px(TITLEBAR_HEIGHT))
         .flex()

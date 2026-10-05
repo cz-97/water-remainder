@@ -402,7 +402,10 @@ pub fn save_main_window_state(cx: &mut App) {
         let _ = handle.update(cx, |view, window, _| {
             if let Ok(mut store) = view.store.lock() {
                 store.window_state = Some(capture_window_state(window));
-                save_store(&store);
+                // 窗口位置/尺寸属于「记不住也不影响使用」的一类：**刻意**只做尽力而为，
+                // 失败不弹框打扰用户（关窗时弹一个「窗口位置没存住」毫无意义）。
+                // 真正要紧的 interval / autostart 走设置窗，那里失败会明确提示。
+                let _ = save_store(&store);
             }
         });
     }
@@ -458,7 +461,9 @@ fn create_main_window(
                     close_settings_window(cx);
                     if let Ok(mut store) = close_store.lock() {
                         store.window_state = Some(capture_window_state(window));
-                        save_store(&store);
+                        // 同 `save_main_window_state`：窗口状态存不住不值得打断用户，
+                        // 窗口照常隐藏、进程照常常驻托盘。
+                        let _ = save_store(&store);
                     }
                     // 关闭按钮只是把窗口收起来，进程继续常驻托盘（退出走托盘菜单）。
                     // 返回 false 让 gpui 吞掉 WM_CLOSE，不再交给 DefWindowProc 销毁窗口。

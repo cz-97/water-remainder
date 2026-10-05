@@ -24,6 +24,9 @@ pub struct SettingsWindow {
     /// 每帧做一次 `stat` 系统调用。它只在「更换图片 / 恢复默认」两个动作后变化，
     /// 而那两处就是唯一的写入点，所以在这里跟着改即可。
     custom_image: bool,
+    /// 最近一次改设置**没存住**的原因。有值时界面会就地显示一行提示 ——
+    /// 设置是存在磁盘上的，写不进去必须让用户当场知道，否则重启后「设置自己变回去了」。
+    save_error: Option<String>,
 }
 
 impl Render for SettingsWindow {
@@ -59,13 +62,28 @@ impl Render for SettingsWindow {
             .child(switch(settings.autostart))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |_, _, _, cx| {
-                    let enabled = update_settings(&store, |settings| {
+                cx.listener(move |this, _, _, cx| {
+                    // 先落盘、成功了再动注册表与界面：写失败时 `update_settings`
+                    // 已经把内存值回滚了，这里必须让开关保持原样并给出提示。
+                    match update_settings(&store, |settings| {
                         settings.autostart = !settings.autostart;
                         settings.autostart
-                    });
-                    if let Some(enabled) = enabled {
-                        platform::set_autostart(enabled);
+                    }) {
+                        Ok(enabled) => {
+                            // 注册表写失败也要报出来并回滚设置：开关显示「已开启」
+                            // 而 Run 键没写进去，下次开机不会启动，用户无从察觉。
+                            match platform::set_autostart(enabled) {
+                                Ok(()) => this.save_error = None,
+                                Err(error) => {
+                                    let _ = update_settings(&store, |settings| {
+                                        settings.autostart = !enabled
+                                    });
+                                    platform::set_autostart(!enabled).ok();
+                                    this.save_error = Some(error);
+                                }
+                            }
+                        }
+                        Err(error) => this.save_error = Some(error.to_string()),
                     }
                     cx.notify();
                 }),
@@ -75,9 +93,10 @@ impl Render for SettingsWindow {
         let scheduler_for_decrease = scheduler.clone();
         let decrease = step_button("−", can_decrease).on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |_, _, _, cx| {
+            cx.listener(move |this, _, _, cx| {
                 if can_decrease {
-                    set_interval(&store, &scheduler_for_decrease, interval_index - 1);
+                    this.save_error =
+                        set_interval(&store, &scheduler_for_decrease, interval_index - 1);
                     cx.notify();
                 }
             }),
@@ -86,9 +105,10 @@ impl Render for SettingsWindow {
         let scheduler_for_increase = scheduler.clone();
         let increase = step_button("+", can_increase).on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |_, _, _, cx| {
+            cx.listener(move |this, _, _, cx| {
                 if can_increase {
-                    set_interval(&store, &scheduler_for_increase, interval_index + 1);
+                    this.save_error =
+                        set_interval(&store, &scheduler_for_increase, interval_index + 1);
                     cx.notify();
                 }
             }),
@@ -166,6 +186,10 @@ impl Render for SettingsWindow {
 
         let title_bar = titlebar("设置", window_button("\u{e8bb}", WindowControlArea::Close));
 
+        // 落盘失败的提示条：固定在正文最上方，用户改完立刻能看到。
+        // 设置是持久化到磁盘的，写不进去却显示成功，重启后设置会「自己变回去」。
+        let save_error = self.save_error.clone();
+
         div()
             .size_full()
             .flex()
@@ -184,6 +208,18 @@ impl Render for SettingsWindow {
                     // 窗口不可缩放，内容必须自己装得下：`overflow_y_scroll`
                     // 避免以后再加一行设置时把底部条目裁掉（且没有滚动条可滚）。
                     .overflow_y_scroll()
+                    .when_some(save_error, |this, message| {
+                        this.child(
+                            div()
+                                .mb_2()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .text_sm()
+                                .text_color(rgb(palette::overlay::WARNING))
+                                .child(format!("设置没能保存：{message}")),
+                        )
+                    })
                     .child(
                         div()
                             .text_sm()
@@ -310,14 +346,24 @@ fn step_button(label: &'static str, enabled: bool) -> gpui_kit::Div {
         .child(label)
 }
 
-fn set_interval(store: &Arc<Mutex<Store>>, scheduler: &mpsc::Sender<SchedulerCmd>, index: usize) {
-    let Some(&seconds) = INTERVALS.get(index) else {
-        return;
-    };
-    if update_settings(store, |settings| settings.interval_secs = seconds).is_some() {
-        let _ = scheduler.send(SchedulerCmd::Reschedule(RescheduleType::ChangeInterval(
-            seconds,
-        )));
+/// 切到 `INTERVALS[index]`。返回 `None` 表示成功，`Some(原因)` 表示没存住。
+///
+/// 只有在**真的落盘之后**才通知调度器改间隔：文件没写成功却先改了调度节奏，
+/// 会让本次运行的时间间隔与下次启动读到的不一致。
+fn set_interval(
+    store: &Arc<Mutex<Store>>,
+    scheduler: &mpsc::Sender<SchedulerCmd>,
+    index: usize,
+) -> Option<String> {
+    let &seconds = INTERVALS.get(index)?;
+    match update_settings(store, |settings| settings.interval_secs = seconds) {
+        Ok(()) => {
+            let _ = scheduler.send(SchedulerCmd::Reschedule(RescheduleType::ChangeInterval(
+                seconds,
+            )));
+            None
+        }
+        Err(error) => Some(error.to_string()),
     }
 }
 
@@ -350,6 +396,7 @@ pub fn open_settings_window(
                 store,
                 scheduler,
                 custom_image,
+                save_error: None,
             })
         },
     );

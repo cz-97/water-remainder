@@ -29,6 +29,36 @@ pub fn enable_system_menu_theme() {
 #[cfg(not(windows))]
 pub fn enable_system_menu_theme() {}
 
+/// 非致命的启动警告：把原因告诉用户，然后继续运行。
+///
+/// 与 [`fatal_startup_error`] 的区别只在于「还能不能继续用」：托盘建不起来就彻底
+/// 没有入口，必须退出；而注册表自启没写成功只是这一项没生效，程序照常能用，
+/// 不该因此拒绝启动。同样走原生 `MessageBoxW` —— 这里往往还没有任何 GPUI 窗口。
+#[cfg(windows)]
+pub fn warn(message: &str) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    use windows::core::HSTRING;
+
+    let text = HSTRING::from(message);
+    let caption = HSTRING::from("喝水提醒");
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            &text,
+            &caption,
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+pub fn warn(message: &str) {
+    eprintln!("喝水提醒：{message}");
+}
+
 /// 启动期的致命错误：弹一个原生提示框把原因告诉用户，然后结束进程。
 ///
 /// 走原生 `MessageBoxW` 而不是 GPUI 窗口，是因为这一步可能失败得比任何窗口都早
@@ -63,7 +93,12 @@ pub fn fatal_startup_error(message: &str) -> ! {
 }
 
 #[cfg(windows)]
-pub fn set_autostart(enabled: bool) {
+/// 增删注册表 Run 键。返回失败原因，交给调用方决定怎么提示。
+///
+/// 不能吞掉错误：用户勾了「开机启动」而注册表没写进去，界面上的开关却是开着的，
+/// 下次开机不会启动 —— 这种「显示成功、实际没做」正是最难排查的一类问题。
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
         RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
@@ -85,36 +120,57 @@ pub fn set_autostart(enabled: bool) {
         )
     };
     if result.0 != 0 {
-        return;
+        return Err(format!("无法打开开机启动注册表项（错误码 {}）", result.0));
     }
 
-    unsafe {
+    let outcome = unsafe {
         if enabled {
-            if let Ok(exe) = std::env::current_exe() {
-                // 路径必须带引号：Run 键的值会被 Windows 直接当命令行解析，装在含
-                // 空格的目录（如 `C:\Program Files\...`）时会被按空格切开，
-                // 开机启动于是静默失效。
-                let mut value: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().collect();
-                value.push(0);
-                let _ = RegSetValueExW(
-                    key,
-                    w!("WaterRemainder"),
-                    0,
-                    REG_SZ,
-                    Some(std::slice::from_raw_parts(
-                        value.as_ptr() as *const u8,
-                        value.len() * 2,
-                    )),
-                );
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    // 路径必须带引号：Run 键的值会被 Windows 直接当命令行解析，装在含
+                    // 空格的目录（如 `C:\Program Files\...`）时会被按空格切开，
+                    // 开机启动于是静默失效。
+                    let mut value: Vec<u16> =
+                        format!("\"{}\"", exe.display()).encode_utf16().collect();
+                    value.push(0);
+                    let status = RegSetValueExW(
+                        key,
+                        w!("WaterRemainder"),
+                        0,
+                        REG_SZ,
+                        Some(std::slice::from_raw_parts(
+                            value.as_ptr() as *const u8,
+                            value.len() * 2,
+                        )),
+                    );
+                    if status.0 == 0 {
+                        Ok(())
+                    } else {
+                        Err(format!("写入开机启动项失败（错误码 {}）", status.0))
+                    }
+                }
+                Err(error) => Err(format!("无法取得程序路径：{error}")),
             }
         } else {
-            let _ = RegDeleteValueW(key, w!("WaterRemainder"));
+            // 值本来就不存在时 RegDeleteValueW 会返回 ERROR_FILE_NOT_FOUND，
+            // 那正是我们想要的结果，不算失败。
+            let status = RegDeleteValueW(key, w!("WaterRemainder"));
+            if status.0 == 0 || status.0 == ERROR_FILE_NOT_FOUND.0 {
+                Ok(())
+            } else {
+                Err(format!("移除开机启动项失败（错误码 {}）", status.0))
+            }
         }
+    };
+    unsafe {
         let _ = RegCloseKey(key);
     }
+    outcome
 }
 #[cfg(not(windows))]
-pub fn set_autostart(_: bool) {}
+pub fn set_autostart(_: bool) -> Result<(), String> {
+    Ok(())
+}
 
 #[cfg(windows)]
 pub fn ensure_single_instance() -> bool {

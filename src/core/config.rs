@@ -126,10 +126,29 @@ fn parse_store(text: &str) -> Store {
     }
     s
 }
-pub fn save_store(s: &Store) {
+/// 取一份设置快照。
+///
+/// 锁中毒（此前有线程持锁时 panic）时仍然把数据读出来：`Settings` 是纯数据，
+/// 中毒只是「有人 panic 过」的标记，不代表内容损坏。这里刻意不 `unwrap` ——
+/// release 下 `panic = "abort"`，在启动路径上 panic 会让进程连同托盘图标一起
+/// 无声消失，而这正是本项目一直在消除的那类结局。
+pub fn settings_snapshot(store: &Arc<Mutex<Store>>) -> Settings {
+    store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .settings
+        .clone()
+}
+
+/// 落盘设置与窗口状态。
+///
+/// 返回写入结果而不是内部吞掉：磁盘满、目录只读、被安全软件锁住都会失败，
+/// 而调用方（设置窗）需要据此决定要不要把界面改回原样 —— 让开关显示「已开启」
+/// 而文件里其实没写进去，就是在骗用户。
+pub fn save_store(s: &Store) -> std::io::Result<()> {
     let p = settings_file();
     if let Some(d) = p.parent() {
-        let _ = fs::create_dir_all(d);
+        fs::create_dir_all(d)?;
     }
     let mut out = format!(
         "interval={}\nautostart={}\n",
@@ -141,7 +160,7 @@ pub fn save_store(s: &Store) {
             w.x, w.y, w.width, w.height, w.maximized
         ));
     }
-    let _ = write_atomic(&p, &out);
+    write_atomic(&p, &out)
 }
 
 /// 原子地覆盖写一个小文本文件：先写同目录下的临时文件并 `sync_all`，再改名覆盖。
@@ -164,16 +183,55 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     })
 }
 
-/// 改设置并落盘的唯一入口：加锁、修改、持久化都在这里完成，
-/// 调用方只描述「改什么」。返回闭包的返回值；锁中毒时返回 `None` 且不落盘。
+/// 改设置的唯一入口：加锁、修改、落盘都在这里完成，调用方只描述「改什么」。
+///
+/// 落盘失败时**把内存改回去**再返回错误 —— 否则界面显示的是「已生效」，而
+/// `settings.txt` 里还是旧值，用户重启一次就会发现设置莫名复原。宁可当场
+/// 告诉用户没存住，也不要制造这种分叉。
 pub fn update_settings<R>(
     store: &Arc<Mutex<Store>>,
     edit: impl FnOnce(&mut Settings) -> R,
-) -> Option<R> {
-    let mut guard = store.lock().ok()?;
+) -> Result<R, SaveError> {
+    update_settings_with(store, edit, save_store)
+}
+
+/// `update_settings` 的实现主体，落盘动作可注入。
+///
+/// 之所以把保存步骤当参数传进来，是为了能测试「落盘失败时内存值被回滚」这条
+/// 关键路径 —— 否则测试就得去写用户真实的 `settings.txt`，那是绝不能做的事。
+fn update_settings_with<R>(
+    store: &Arc<Mutex<Store>>,
+    edit: impl FnOnce(&mut Settings) -> R,
+    save: impl FnOnce(&Store) -> std::io::Result<()>,
+) -> Result<R, SaveError> {
+    let mut guard = store.lock().map_err(|_| SaveError::Locked)?;
+    let before = guard.settings.clone();
     let result = edit(&mut guard.settings);
-    save_store(&guard);
-    Some(result)
+    match save(&guard) {
+        Ok(()) => Ok(result),
+        Err(error) => {
+            guard.settings = before;
+            Err(SaveError::Io(error))
+        }
+    }
+}
+
+/// 改设置失败的原因。分成两种是为了让界面能说清楚：锁中毒是程序内部异常，
+/// 写文件失败则通常意味着磁盘满或目录权限问题。
+#[derive(Debug)]
+pub enum SaveError {
+    /// `Mutex` 中毒：此前某个持锁线程 panic 过。
+    Locked,
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SaveError::Locked => write!(f, "设置状态异常"),
+            SaveError::Io(error) => write!(f, "写入设置文件失败：{error}"),
+        }
+    }
 }
 
 fn default_window_state() -> WindowState {
@@ -299,5 +357,76 @@ mod tests {
         assert!(leftovers.is_empty(), "目录里残留了临时文件：{leftovers:?}");
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    fn store_with(interval: u64, autostart: bool) -> Arc<Mutex<Store>> {
+        Arc::new(Mutex::new(Store {
+            settings: Settings {
+                interval_secs: interval,
+                autostart,
+            },
+            window_state: None,
+        }))
+    }
+
+    #[test]
+    fn update_settings_applies_and_reports_success() {
+        let store = store_with(3000, false);
+        let result = update_settings_with(
+            &store,
+            |settings| {
+                settings.autostart = true;
+                settings.autostart
+            },
+            |_| Ok(()),
+        );
+        assert!(result.unwrap());
+        assert!(store.lock().unwrap().settings.autostart);
+    }
+
+    /// 落盘失败必须把内存值改回去。否则界面显示「已开启」而文件里仍是旧值，
+    /// 用户重启一次就会发现设置莫名复原 —— 这是刻意避免的分叉。
+    #[test]
+    fn update_settings_rolls_back_when_saving_fails() {
+        let store = store_with(3000, false);
+        let result = update_settings_with(
+            &store,
+            |settings| {
+                settings.interval_secs = 900;
+                settings.autostart = true;
+            },
+            |_| Err(std::io::Error::other("磁盘满了")),
+        );
+        assert!(result.is_err(), "落盘失败必须返回错误");
+        let after = store.lock().unwrap().settings.clone();
+        assert_eq!(after.interval_secs, 3000, "间隔必须回滚");
+        assert!(!after.autostart, "开机启动必须回滚");
+    }
+
+    /// 返回的错误要能说清原因，界面才有东西可显示。
+    #[test]
+    fn save_error_describes_the_failure() {
+        let error = SaveError::Io(std::io::Error::other("磁盘满了"));
+        assert!(error.to_string().contains("磁盘满了"));
+        assert!(!SaveError::Locked.to_string().is_empty());
+    }
+
+    /// 锁中毒（有线程持锁时 panic）不能让程序崩，也不能把好数据丢掉：
+    /// release 下 `panic = "abort"`，启动路径上 panic 会无声退出。
+    #[test]
+    fn settings_snapshot_survives_a_poisoned_lock() {
+        let store = store_with(2400, true);
+        let clone = store.clone();
+        // 在持锁状态下 panic，把 Mutex 变成中毒状态。
+        let _ = std::thread::spawn(move || {
+            let _guard = clone.lock().unwrap();
+            panic!("模拟持锁线程 panic");
+        })
+        .join();
+        assert!(store.lock().is_err(), "前提：锁应已中毒");
+
+        let settings = settings_snapshot(&store);
+        assert_eq!(settings.interval_secs, 2400);
+        assert!(settings.autostart);
     }
 }

@@ -9,6 +9,8 @@
 1. **编译检查** — `cargo check --offline`
    - 失败就地修复并重新检查，**通过之前不要进入后续步骤**。
    - 同时跑 `cargo test --offline`：纯函数（分档、格式化、本地日区间、设置解析与原子写）都有测试，改了这些地方必须让测试保持通过。
+   - 再跑 `cargo clippy --offline`：`Cargo.toml` 的 `[lints.clippy]` 把 `clippy::all` 提成了 `deny`，**新增警告会直接让 clippy 失败**（已实测：注入一个 `len_zero` 会让 exit code 变 101）。
+   - `cargo fmt --check` 应为空。工具链由 `rust-toolchain.toml` 钉在 `stable` 通道（**不要**改成精确版本号，那样 rustup 会去联网下载特定版本，本地没装过就直接失败）。
 2. **运行验证** — `cargo run`
    - 仅在第 1 步通过后执行。
    - 这是常驻托盘的 GUI 程序（单实例、命名互斥体）：若旧进程仍在运行，**先结束它**再 `cargo run`，否则新进程会因互斥体已存在而直接退出。结束命令：`taskkill /F /IM water-remainder.exe`。
@@ -122,7 +124,10 @@
 
 拆成两个互不干扰的持久化通道：
 
-- `core/config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。落盘走 `write_atomic`（同目录临时文件 + `sync_all` + 改名覆盖），因为启动时会无条件按 `autostart` 调 `set_autostart`，一次「写一半就崩溃」会让文件回退成默认值、进而**静默关掉用户的开机启动**
+- `core/config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。落盘走 `write_atomic`（同目录临时文件 + `sync_all` + 改名覆盖），因为启动时会无条件按 `autostart` 调 `set_autostart`，一次「写一半就崩溃」会让文件回退成默认值、进而**静默关掉用户的开机启动**。
+  - **落盘失败必须能被调用方看见**：`save_store` 返回 `io::Result`，`update_settings` 返回 `Result<_, SaveError>`，且在失败时**把内存里的改动回滚**。否则界面显示「已开启」而文件里还是旧值，用户重启一次才发现设置莫名复原。
+  - `settings_snapshot(&store)` 取设置快照，锁中毒时用 `into_inner()` 继续读而不 `unwrap`：`Settings` 是纯数据，中毒只是「有人持锁时 panic 过」，内容并没坏；而在启动路径上 panic 会无声退出（release 下 `panic = "abort"`）。
+  - 只有**用户在意**的设置在失败时提示（`interval` / `autostart`）；窗口位置尺寸属于「记不住也不影响使用」，`save_store` 的返回值被刻意 `let _ =` 忽略，不值得弹框打扰。
 - `core/data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。内存按需分层：**按月懒加载的日级聚合 `MONTHS`（`BTreeMap<月, DayCounts{日期→次数}>`，只在访问某月时查一次，之后含空月永久命中）** 与 **明细 `DETAILS`（`BTreeMap<NaiveDate, Arc<Vec<u64>>>`，点开某天才查一次）**；另有独立的全局极值 `BOUNDS`（最早 / 最近时间戳，供左箭头下界与「上次喝水」）。`save_time()` 落库后只增量更新这些缓存。`get_elapsed()` 由 `last_time()`（全局 `MAX(timestamp)`）得出，**完全不需要明细**。
 
 **记录缓存的生命周期（`core/data.rs`）**
@@ -160,6 +165,9 @@
   - **中央插图可换**：默认用内置 `water.png`；若数据目录下存在 `reminder.img`（由设置窗「更换图片」写入）则优先用它，按文件头魔数解码（png / jpg / gif / bmp / webp / tif / ico），无法解析时回退内置图。
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
 - `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）+ 一个只说明「主题跟随系统」的静态行。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。窗口高度已为新增的「外观」分组从 420 调到 520，并给内容区加了 `overflow_y_scroll`（需先 `.id(..)`，`overflow_*` 是 `InteractiveElement` 的方法），以后再加设置项不会把底部裁掉。
+  - **失败要当场说**：`save_error` 字段存最近一次失败原因，正文最上方渲染一条提示。失败分两处：`update_settings` 写文件失败，以及 `platform::set_autostart` 写注册表失败 —— 后者会把设置回滚再提示，否则开关显示「已开启」而 Run 键没写进去，下次开机不会启动。
+  - **只有真的成功才动下游**：`set_interval` 落盘成功后才发 `ChangeInterval`，否则本次运行的节奏会和下次启动读到的不一致。
+  - `custom_image` 缓存「是否已自定义」，避免每帧 `path.exists()`；两个按钮是它唯一的写入点，写完各自刷新这个字段。
 
 `ui/mod.rs` 是界面共享模块：配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、外观订阅 `follow_system_appearance`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有四样：`id`、悬停底色、悬停前景色与图标字号（控制键 12、功能键 14）—— 悬停前景色也要传，是因为浅色外观下深色图标落在红色关闭键上会看不清。时间戳换算与文案格式化（`now` / `local_date` / `day_bounds` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now` / `format_date`）**不在这一层**，而在 `core/time.rs`：`core::data` 也要按本地日切分查询区间，放在 `ui` 会让领域层反向依赖界面。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
@@ -186,7 +194,8 @@
 - 浮层开着时用户可能改分辨率、拔接显示器，因此浮层 View 上还挂了 `observe_window_bounds` → `refit_reminder_window` 重新对齐。`fit_client_to_monitor` 是**幂等**的（已对齐时四个差值全为 0 直接返回），所以它自己触发的 `WM_MOVE` 再回调一次也不会递归
 - 取不到显示器矩形或客户区矩形时整个跳过，绝不猜一个位置把窗口甩出屏幕
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
-- `set_autostart` — 注册表 Run 键的增删。写入的值是**带引号的完整 exe 路径**：Run 键会被 Windows 直接当命令行解析，装在含空格的目录（如 `C:\Program Files\...`）时不加引号会被按空格切开，开机启动于是静默失效
+- `set_autostart` — 注册表 Run 键的增删，返回 `Result<(), String>`。写入的值是**带引号的完整 exe 路径**：Run 键会被 Windows 直接当命令行解析，装在含空格的目录（如 `C:\Program Files\...`）时不加引号会被按空格切开，开机启动于是静默失效。删除时把 `ERROR_FILE_NOT_FOUND` 当作成功（本来就不存在正是想要的结果）；其它失败一律上报，绝不静默
+- `fatal_startup_error` / `warn` — 两个原生 `MessageBoxW`：前者弹完 `process::exit(1)`（返回 `!`），用于「没有它程序就没法用」的情况（托盘建不起来）；后者只是提示后继续跑，用于「这一项没生效但程序照常可用」（自启没写进注册表）。走原生弹框是因为这些故障往往发生在任何 GPUI 窗口存在之前
 - `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定；句柄刻意不关闭，进程存活期间持续持有互斥体
 - `pick_image_file` — `GetOpenFileNameW` 弹出系统「打开文件」对话框（`Win32_UI_Controls_Dialogs` feature），供设置窗「更换图片」用
 - `show_main_window` — 按需 `SW_SHOWMAXIMIZED` / `SW_SHOWNOACTIVATE` 并置前；**置脏与显示绑在一起**（先 `Window::refresh()` 再 `ShowWindow`），调用方无法漏掉这一步
@@ -245,13 +254,17 @@ cargo run
 # 单元测试（纯函数：分档、格式化、本地日区间、设置解析与原子写）
 cargo test
 
+# 静态检查（[lints.clippy] 已把 clippy::all 提成 deny，警告即失败）
+cargo clippy
+cargo fmt --check
+
 # 发布构建（opt-level="z" + fat LTO + strip，体积优先）
 cargo build --release
 ```
 
 发布产物：`target\release\water-remainder.exe`
 
-仓库内提供了打包脚本 `build-copy.ps1`：执行 release 构建后把 exe 覆盖复制到 `D:\executable`，方便直接分发。
+仓库内提供了打包脚本 `build-copy.ps1`：执行 release 构建后把 exe 覆盖复制到 `D:\executable`，方便直接分发。它走 `cargo build --release --offline`（与上面的联网约定一致），结束时默认暂停等待按键；**被脚本或 CI 调用时加 `-NoPause`**，否则会一直挂住。
 
 ## 说明
 

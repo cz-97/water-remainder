@@ -4,7 +4,7 @@ mod core;
 mod platform;
 mod ui;
 
-use core::config::load_store;
+use core::config::{load_store, settings_snapshot};
 use core::scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
@@ -38,9 +38,13 @@ fn main() {
             // 只启用 gpui 层，所以这里只登记了 gpui-base 的主题与控件全局态，界面自绘不读它。
             gpui_kit::init(cx);
             let store = Arc::new(Mutex::new(load_store()));
-            let settings = store.lock().unwrap().settings.clone();
+            let settings = settings_snapshot(&store);
             platform::enable_system_menu_theme();
-            platform::set_autostart(settings.autostart);
+            // 启动时把注册表对齐到设置里的 `autostart`。失败只意味着这次没对上，
+            // 不影响程序使用，因此提示但不中断：用户至少能从弹出框知道原因。
+            if let Err(error) = platform::set_autostart(settings.autostart) {
+                platform::warn(&format!("{error}\n\n开机启动设置未能生效。"));
+            }
             // 托盘建不起来就没有常驻入口、也没有退出方式，因此这是致命错误：提示用户
             // 后直接退出，而不是让 `expect` 在 release（`panic = "abort"`）下无声消失。
             let (tray, show, quit) = match setup_tray() {

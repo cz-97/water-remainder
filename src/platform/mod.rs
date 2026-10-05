@@ -29,6 +29,39 @@ pub fn enable_system_menu_theme() {
 #[cfg(not(windows))]
 pub fn enable_system_menu_theme() {}
 
+/// 启动期的致命错误：弹一个原生提示框把原因告诉用户，然后结束进程。
+///
+/// 走原生 `MessageBoxW` 而不是 GPUI 窗口，是因为这一步可能失败得比任何窗口都早
+/// （托盘建不起来时，程序既没有界面，也没有退出入口）。返回 `!`，调用方因此不必
+/// 再考虑「提示完还继续往下跑」的分支 —— 那正是原文里 `expect` 的问题：release 下
+/// `panic = "abort"`，进程连同托盘图标一起无声消失，用户拿不到任何线索。
+#[cfg(windows)]
+pub fn fatal_startup_error(message: &str) -> ! {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
+    use windows::core::HSTRING;
+
+    let text = HSTRING::from(message);
+    let caption = HSTRING::from("喝水提醒");
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            &text,
+            &caption,
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+    std::process::exit(1);
+}
+
+#[cfg(not(windows))]
+pub fn fatal_startup_error(message: &str) -> ! {
+    eprintln!("喝水提醒启动失败：{message}");
+    std::process::exit(1);
+}
+
 #[cfg(windows)]
 pub fn set_autostart(enabled: bool) {
     use windows::Win32::System::Registry::{
@@ -58,7 +91,10 @@ pub fn set_autostart(enabled: bool) {
     unsafe {
         if enabled {
             if let Ok(exe) = std::env::current_exe() {
-                let mut value: Vec<u16> = exe.to_string_lossy().encode_utf16().collect();
+                // 路径必须带引号：Run 键的值会被 Windows 直接当命令行解析，装在含
+                // 空格的目录（如 `C:\Program Files\...`）时会被按空格切开，
+                // 开机启动于是静默失效。
+                let mut value: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().collect();
                 value.push(0);
                 let _ = RegSetValueExW(
                     key,
@@ -171,8 +207,8 @@ pub fn style_main_window(_: &gpui_kit::Window) {}
 #[cfg(windows)]
 pub fn style_reminder_window(window: &gpui_kit::Window) {
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY, DWMWCP_DONOTROUND,
-        DWMNCRP_DISABLED, DwmSetWindowAttribute,
+        DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY,
+        DWMWCP_DONOTROUND, DwmSetWindowAttribute,
     };
 
     let Some(hwnd) = hwnd(window) else {
@@ -228,9 +264,11 @@ pub fn refit_reminder_window(_: &gpui_kit::Window) {}
 #[cfg(windows)]
 fn fit_client_to_monitor(hwnd: windows::Win32::Foundation::HWND) {
     use windows::Win32::Foundation::{POINT, RECT};
-    use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::Graphics::Gdi::{
+        ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_NOOWNERZORDER,
+        GetClientRect, GetWindowRect, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SetWindowPos,
     };
 
     unsafe {
@@ -254,8 +292,14 @@ fn fit_client_to_monitor(hwnd: windows::Win32::Foundation::HWND) {
         }
         // `GetClientRect` 给的是客户区内的坐标，要靠 `ClientToScreen` 才知道
         // 它在屏幕上的实际位置。
-        let mut client_top_left = POINT { x: client_rect.left, y: client_rect.top };
-        let mut client_bottom_right = POINT { x: client_rect.right, y: client_rect.bottom };
+        let mut client_top_left = POINT {
+            x: client_rect.left,
+            y: client_rect.top,
+        };
+        let mut client_bottom_right = POINT {
+            x: client_rect.right,
+            y: client_rect.bottom,
+        };
         if !ClientToScreen(hwnd, &mut client_top_left).as_bool()
             || !ClientToScreen(hwnd, &mut client_bottom_right).as_bool()
         {

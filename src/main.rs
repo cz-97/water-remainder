@@ -5,11 +5,11 @@ mod platform;
 mod ui;
 
 use core::config::load_store;
+use core::scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
 use gpui_kit::App;
 use gpui_kit::platform::application;
-use core::scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
 use platform::tray::setup_tray;
 use std::sync::{Arc, Mutex, mpsc};
 use tray_icon::menu::MenuEvent;
@@ -41,7 +41,14 @@ fn main() {
             let settings = store.lock().unwrap().settings.clone();
             platform::enable_system_menu_theme();
             platform::set_autostart(settings.autostart);
-            let (tray, show, quit) = setup_tray();
+            // 托盘建不起来就没有常驻入口、也没有退出方式，因此这是致命错误：提示用户
+            // 后直接退出，而不是让 `expect` 在 release（`panic = "abort"`）下无声消失。
+            let (tray, show, quit) = match setup_tray() {
+                Ok(tray) => tray,
+                Err(error) => platform::fatal_startup_error(&format!(
+                    "无法创建托盘图标，程序无法继续运行。\n\n{error}"
+                )),
+            };
             std::mem::forget(tray);
             let (scheduler_tx, alarm_rx) = start_scheduler(settings.interval_secs);
             // 睡眠唤醒后：与启动一致，根据最近一次喝水记录重新计算第一次提醒。

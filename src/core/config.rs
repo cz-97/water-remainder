@@ -1,7 +1,8 @@
 use crate::core::paths::app_dir;
 use std::{
     fs,
-    path::PathBuf,
+    io::Write,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -131,7 +132,27 @@ pub fn save_store(s: &Store) {
             w.x, w.y, w.width, w.height, w.maximized
         ));
     }
-    let _ = fs::write(p, out);
+    let _ = write_atomic(&p, &out);
+}
+
+/// 原子地覆盖写一个小文本文件：先写同目录下的临时文件并 `sync_all`，再改名覆盖。
+///
+/// 直接 `fs::write` 会在写入途中把原文件截断；本程序启动时又无条件按 `autostart`
+/// 调 [`crate::platform::set_autostart`]，所以一次「写到一半就崩溃」会让
+/// `settings.txt` 回退成默认值（`autostart = false`），进而**静默关掉用户的开机启动**。
+/// 改名在 Windows 上对已存在的目标文件是覆盖式原子替换，读到的永远是完整的旧内容
+/// 或完整的新内容。
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
+    fs::rename(&tmp, path).inspect_err(|_| {
+        // 改名失败时别把临时文件留在数据目录里。
+        let _ = fs::remove_file(&tmp);
+    })
 }
 
 /// 改设置并落盘的唯一入口：加锁、修改、持久化都在这里完成，

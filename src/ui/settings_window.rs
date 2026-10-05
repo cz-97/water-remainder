@@ -237,12 +237,15 @@ impl Render for SettingsWindow {
                     .child(interval_row)
                     .child(image_row)
                     .child(div().h(px(12.)))
+                    // 分组标题。三组都**不带**内边距，与「提醒」「启动」「外观」
+                    // 的标题保持同一列；组内真正的条目（间隔、开机启动、主题行）
+                    // 才各自带 `px_4` 作为卡片内边距。
                     .child(
                         div()
                             .text_sm()
                             .text_color(rgb(palette::current().text_muted))
                             .mb_2()
-                            .child("启动"),
+                            .child("系统"),
                     )
                     .child(autostart)
                     .child(div().h(px(12.)))
@@ -253,10 +256,14 @@ impl Render for SettingsWindow {
                             .mb_2()
                             .child("外观"),
                     )
-                    // 主题：三张预览卡片（跟随系统 / 浅色 / 深色），选中项用强调色描边。
-                    // 系统跟随的预览用当前实际生效的那一套色（跟随时就是系统的深浅，
-                    // 强制时就是它自己），所以卡片内容始终是「选了它之后界面长什么样」。
-                    .child(div().text_color(rgb(palette::current().text)).child("主题"))
+                    // 「主题」这一行不是卡片式条目（它下面直接是两张预览和开关），
+                    // 所以和组内其它条目一样带 `px_4`，与「提醒」「系统」里的行左对齐。
+                    .child(
+                        div()
+                            .text_color(rgb(palette::current().text))
+                            .px_4()
+                            .child("主题"),
+                    )
                     .child(theme_row(self.store.clone(), cx)),
             )
     }

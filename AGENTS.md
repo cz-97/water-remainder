@@ -81,6 +81,8 @@
 
 程序的唯一「装配点」。启动时先做单实例互斥检查，随后 `gpui_kit::init(cx)` 初始化 gpui-kit 已启用的层，再以 `QuitMode::Explicit` 启动 GPUI——关闭窗口不等于结束进程（主窗关闭只是隐藏），托盘常驻，退出走托盘菜单。
 
+**启动失败一律要「说话」**：本程序是 `windows_subsystem = "windows"` 的托盘程序，release 下又是 `panic = "abort"`，所以任何在这里 panic 都表现为「进程连同托盘图标一起无声消失」。`setup_tray()` 因此返回 `Result<_, String>` 而不是内部 `expect`，失败时走 `platform::fatal_startup_error(message)` —— 它弹一个原生 `MessageBoxW`（此时还没有任何 GPUI 窗口可用）再 `process::exit(1)`，返回类型是 `!`，调用方不必考虑「提示完还继续跑」的分支。判据是**只有真正导致不可用的问题才算致命**：托盘图标建不起来 → 既没有常驻入口也没有退出方式，致命；往右键菜单里追加条目的失败只是局部降级（图标与左键开会仍在），仍用 `.ok()` 忽略。
+
 三个异构事件源被统一包装成 `AppEvent` 枚举，通过一条 `futures_channel::mpsc` 无界通道送入同一个异步消费任务：
 
 - `TrayIconEvent`（托盘点击）— 来自 `tray-icon` 的全局回调
@@ -108,7 +110,7 @@
 
 拆成两个互不干扰的持久化通道：
 
-- `core/config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。
+- `core/config.rs` — 设置与窗口状态，纯文本 `key=value`，路径 `%APPDATA%\water-remainder\settings.txt`。零依赖、可读、损坏时逐行回退默认值。`INTERVALS: &[u64]` 是间隔秒数表，设置窗按索引取值、标签由秒数现算「N 分钟」，UI 与调度共用同一份数据源。落盘走 `write_atomic`（同目录临时文件 + `sync_all` + 改名覆盖），因为启动时会无条件按 `autostart` 调 `set_autostart`，一次「写一半就崩溃」会让文件回退成默认值、进而**静默关掉用户的开机启动**
 - `core/data.rs` — 喝水记录，SQLite 单表 `drink_records(id, timestamp)` + `timestamp` 索引。开启 WAL 与 `busy_timeout`，`r2d2` 连接池上限 4。内存按需分层：**按月懒加载的日级聚合 `MONTHS`（`BTreeMap<月, DayCounts{日期→次数}>`，只在访问某月时查一次，之后含空月永久命中）** 与 **明细 `DETAILS`（`BTreeMap<NaiveDate, Arc<Vec<u64>>>`，点开某天才查一次）**；另有独立的全局极值 `BOUNDS`（最早 / 最近时间戳，供左箭头下界与「上次喝水」）。`save_time()` 落库后只增量更新这些缓存。`get_elapsed()` 由 `last_time()`（全局 `MAX(timestamp)`）得出，**完全不需要明细**。
 
 **记录缓存的生命周期（`core/data.rs`）**
@@ -172,7 +174,7 @@
 - 浮层开着时用户可能改分辨率、拔接显示器，因此浮层 View 上还挂了 `observe_window_bounds` → `refit_reminder_window` 重新对齐。`fit_client_to_monitor` 是**幂等**的（已对齐时四个差值全为 0 直接返回），所以它自己触发的 `WM_MOVE` 再回调一次也不会递归
 - 取不到显示器矩形或客户区矩形时整个跳过，绝不猜一个位置把窗口甩出屏幕
 - `enable_system_menu_theme` — 调用 uxtheme 未公开导出 `SetPreferredAppMode`（序号 135）让原生菜单跟随系统暗色主题
-- `set_autostart` — 注册表 Run 键的增删
+- `set_autostart` — 注册表 Run 键的增删。写入的值是**带引号的完整 exe 路径**：Run 键会被 Windows 直接当命令行解析，装在含空格的目录（如 `C:\Program Files\...`）时不加引号会被按空格切开，开机启动于是静默失效
 - `ensure_single_instance` — `CreateMutexW` + `ERROR_ALREADY_EXISTS` 判定；句柄刻意不关闭，进程存活期间持续持有互斥体
 - `pick_image_file` — `GetOpenFileNameW` 弹出系统「打开文件」对话框（`Win32_UI_Controls_Dialogs` feature），供设置窗「更换图片」用
 - `show_main_window` — 按需 `SW_SHOWMAXIMIZED` / `SW_SHOWNOACTIVATE` 并置前；**置脏与显示绑在一起**（先 `Window::refresh()` 再 `ShowWindow`），调用方无法漏掉这一步

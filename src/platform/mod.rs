@@ -46,7 +46,7 @@ pub fn warn(message: &str) {
     let caption = HSTRING::from("喝水提醒");
     unsafe {
         MessageBoxW(
-            HWND::default(),
+            Some(HWND::default()),
             &text,
             &caption,
             MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
@@ -77,7 +77,7 @@ pub fn fatal_startup_error(message: &str) -> ! {
     let caption = HSTRING::from("喝水提醒");
     unsafe {
         MessageBoxW(
-            HWND::default(),
+            Some(HWND::default()),
             &text,
             &caption,
             MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
@@ -110,7 +110,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         RegCreateKeyExW(
             HKEY_CURRENT_USER,
             w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-            0,
+            Some(0),
             None,
             REG_OPTION_NON_VOLATILE,
             KEY_SET_VALUE,
@@ -136,7 +136,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
                     let status = RegSetValueExW(
                         key,
                         w!("WaterRemainder"),
-                        0,
+                        Some(0),
                         REG_SZ,
                         Some(std::slice::from_raw_parts(
                             value.as_ptr() as *const u8,

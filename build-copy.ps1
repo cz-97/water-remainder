@@ -73,6 +73,3 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  编译并复制完成（覆盖模式）" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-
-# 暂停等待用户按键（传了 -NoPause 则跳过）
-Stop-WithPause 0

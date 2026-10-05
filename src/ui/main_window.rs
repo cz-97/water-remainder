@@ -19,6 +19,35 @@ use gpui_kit::{
 };
 use std::sync::{Arc, Mutex, mpsc};
 
+/// 左（日历）与右（时间轴）两列的固定宽度。
+const COLUMN_WIDTH: f32 = 250.;
+/// 内容区左右内边距（`p_6` = 1.5rem = 24px，两侧共 48px）。
+const CONTENT_PADDING: f32 = 48.;
+/// 两列之间的间距（`gap_8` = 2rem = 32px）。
+const COLUMN_GAP: f32 = 32.;
+
+/// 主窗最小宽度 = 两列 + 内边距 + 列间距。
+///
+/// 这个值**必须由上面三个常量算出来**，不能各写一遍字面量：两列都是固定宽度、
+/// 外层又不可滚动，窗口一旦窄于这个和，Flexbox 就会把两列压扁（默认 `flex_shrink`
+/// 是 1），日历网格与时间轴跟着变形。此前窗口最小/默认宽度写的是 500，比这里
+/// 少 80px，正是被压缩的状态。
+const CONTENT_WIDTH: f32 = COLUMN_WIDTH * 2. + CONTENT_PADDING + COLUMN_GAP;
+
+/// 主窗最小高度。
+const CONTENT_HEIGHT: f32 = 800.;
+
+/// 把恢复出来的窗口尺寸抬到下限以上（只放大、不缩小）。
+///
+/// 需要这一步是因为 `window_min_size` 只作用在**用户拖拽**上（走 `WM_GETMINMAXINFO`
+/// 的最小跟踪尺寸），并不校验程序自己传给 `CreateWindowExW` 的初始尺寸。旧版本把
+/// 最小宽度设成 500，于是 `settings.txt` 里存下的就是 500 —— 直接按原样恢复的话，
+/// 修好最小宽度也没用，用户看到的仍是被压扁的两列。等到用户真正拖动一次窗口，
+/// 新值才会写回设置文件。
+fn clamp_to_minimum(width: f32, height: f32) -> (f32, f32) {
+    (width.max(CONTENT_WIDTH), height.max(CONTENT_HEIGHT))
+}
+
 /// 一次渲染的全部外部输入。显式传递，「当前时刻」与「记录」因此只在这一处取得，
 /// 子视图不再各自去读全局状态。
 struct RenderInput {
@@ -127,7 +156,7 @@ impl MainWindow {
         }
 
         div()
-            .w(px(250.))
+            .w(px(COLUMN_WIDTH))
             .flex()
             .flex_col()
             .gap_2()
@@ -286,7 +315,7 @@ impl Render for MainWindow {
                     .justify_center()
                     .child(
                         div()
-                            .w(px(250.))
+                            .w(px(COLUMN_WIDTH))
                             .flex()
                             .flex_col()
                             .child(
@@ -302,7 +331,7 @@ impl Render for MainWindow {
                     )
                     .child(
                         div()
-                            .w(px(250.))
+                            .w(px(COLUMN_WIDTH))
                             .flex()
                             .flex_col()
                             .child(div().text_xl().font_weight(FontWeight::BOLD).child(
@@ -388,9 +417,12 @@ fn create_main_window(
     let saved_state = store.lock().ok().and_then(|s| s.window_state);
     let window_bounds = saved_state
         .map(|s| {
+            // 存储的尺寸可能来自旧版本（当时最小宽度是 500），必须抬到下限，
+            // 否则修好最小宽度也看不到效果。
+            let (width, height) = clamp_to_minimum(s.width, s.height);
             let bounds = Bounds {
                 origin: point(px(s.x), px(s.y)),
-                size: size(px(s.width), px(s.height)),
+                size: size(px(width), px(height)),
             };
             if s.maximized {
                 WindowBounds::Maximized(bounds)
@@ -398,7 +430,7 @@ fn create_main_window(
                 WindowBounds::Windowed(bounds)
             }
         })
-        .unwrap_or_else(|| WindowBounds::centered(size(px(500.), px(800.)), cx));
+        .unwrap_or_else(|| WindowBounds::centered(size(px(CONTENT_WIDTH), px(CONTENT_HEIGHT)), cx));
     let close_store = store.clone();
     let handle = cx
         .open_window(
@@ -410,7 +442,7 @@ fn create_main_window(
                     ..Default::default()
                 }),
                 kind: WindowKind::Normal,
-                window_min_size: Some(size(px(500.), px(800.))),
+                window_min_size: Some(size(px(CONTENT_WIDTH), px(CONTENT_HEIGHT))),
                 ..Default::default()
             },
             move |window, cx| {
@@ -442,5 +474,48 @@ fn create_main_window(
             crate::platform::style_main_window(window);
             crate::platform::show_main_window(window);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 两列是固定宽度、外层不可滚动，所以最小宽度必须真的装得下内容。
+    /// 以前这里写死 500，比所需少 80px，两列被 Flexbox 压扁。
+    /// 这里钉住算式本身，避免有人把 `CONTENT_WIDTH` 换成写死的字面量。
+    #[test]
+    fn content_width_is_derived_from_the_columns() {
+        let needed = COLUMN_WIDTH * 2. + CONTENT_PADDING + COLUMN_GAP;
+        assert_eq!(CONTENT_WIDTH, needed);
+        // 两列 250 + 内边距 48 + 间距 32 = 580，这是用户能看见完整两列的下限。
+        assert_eq!(needed, 580.);
+    }
+
+    /// 日历网格自身不能超过列宽，否则格子会被压扁。
+    #[test]
+    fn calendar_grid_fits_inside_one_column() {
+        const CELL: f32 = 30.;
+        const GAP: f32 = 4.; // gap_1
+        let grid = CELL * 7. + GAP * 6.;
+        assert!(
+            grid <= COLUMN_WIDTH,
+            "7 列格子需要 {grid}px，但列宽只有 {COLUMN_WIDTH}px"
+        );
+    }
+
+    /// 恢复旧设置时必须抬到下限，否则老用户看到的仍是被压扁的两列。
+    /// 用户机器上真实存过 `window_width=500`，正是这种情形。
+    #[test]
+    fn restored_size_is_lifted_to_the_minimum() {
+        assert_eq!(clamp_to_minimum(500., 821.33), (580., 821.33));
+        assert_eq!(clamp_to_minimum(400., 300.), (580., 800.));
+    }
+
+    /// 已经够大（或被最大化）的窗口不能被改动。
+    #[test]
+    fn restored_size_above_the_minimum_is_kept() {
+        assert_eq!(clamp_to_minimum(1200., 900.), (1200., 900.));
+        assert_eq!(clamp_to_minimum(580., 800.), (580., 800.));
     }
 }

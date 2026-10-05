@@ -262,22 +262,24 @@ impl Render for SettingsWindow {
     }
 }
 
-/// 主题选择区：左侧「跟随系统」开关，右侧浅色 / 深色两张预览。
+/// 主题选择区：浅色 / 深色两张预览在左，「跟随系统」开关在**最右**。
 ///
 /// 「跟随系统」是**开关**而不是第三张预览 —— 它的含义是「别管我，听系统的」，
 /// 画成一张具体配色反而会误导（它并不是第三种外观）。开关打开时两张预览
 /// **都不选中**（此刻由系统决定用哪张）；关掉并手动点了某一张，那张才描边点亮。
 fn theme_row(store: Arc<Mutex<Store>>, cx: &mut Context<SettingsWindow>) -> impl IntoElement {
     let theme = settings_snapshot(&store).theme;
-    let mut row = div()
-        .flex()
-        .items_center()
-        .gap_4()
-        .child(follow_system_switch(theme, &store, cx));
-    // 折叠成 `impl IntoElement` 需要一个确定类型，所以先建好左侧再依次追加卡片。
+    // `.px_4` 让这一行与「提醒」「启动」里的行左对齐（那些行各自带 px_4 卡片内边距），
+    // 否则主题行会贴着窗口边缘、看起来比别的组矮一截、不协调。
+    let mut row = div().flex().items_center().gap_2().px_4().py_2();
+    // 折叠成 `impl IntoElement` 需要一个确定类型，所以先建好再依次追加。
     for choice in Theme::CHOICES {
         row = row.child(theme_card(choice, theme, &store, cx));
     }
+    // 弹性占位把开关推到最右，和「间隔」行的右对齐控件形成呼应。
+    row = row
+        .child(div().flex_1())
+        .child(follow_system_switch(theme, &store, cx));
     row
 }
 
@@ -328,9 +330,11 @@ fn theme_card(
     let preview = palette::for_preview(theme == Theme::Light);
 
     div()
-        .flex_1()
+        // 固定宽度而不是 `flex_1`：这一行右边要留给「跟随系统」开关，预览铺满会把
+        // 开关挤到换行。150px 足够画清缩略图里的标题栏和内容条。
+        .w(px(150.))
         .h(px(46.))
-        .w_full()
+        .flex_shrink_0()
         .rounded_md()
         .overflow_hidden()
         .border_2()
@@ -667,11 +671,11 @@ mod tests {
             SETTINGS_HEIGHT,
             content
         );
-        // 左边是「跟随系统」开关，右边两张预览 flex_1 均分：520 减去左右内边距 40、
-        // 开关与其文字约 90、两处间隙 32，每张还剩约 180px，够画一张像样的缩略图。
+        // 左边两张预览各 150，加上「跟随系统」开关与其文字约 130，两处间隙 16，
+        // 再加左右内边距 32：合计约 480，窗口 520 刚好放得下且不换行。
         assert!(
-            SETTINGS_WIDTH >= 480.,
-            "窗口宽 {} 放不下「跟随系统」开关和两张预览",
+            2. * 150. + 130. + 2. * 8. + 2. * 16. <= SETTINGS_WIDTH,
+            "窗口宽 {} 放不下两张预览加「跟随系统」开关",
             SETTINGS_WIDTH
         );
     }

@@ -65,12 +65,11 @@ impl MainWindow {
             .items_center()
             .justify_between()
             .child(self.month_nav_button("month-prev", "\u{2039}", prev_month, cx))
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
-                    .child(format!("{}年{}月", month.year(), month.month())),
-            )
+            .child(div().text_lg().font_weight(FontWeight::BOLD).child(format!(
+                "{}年{}月",
+                month.year(),
+                month.month()
+            )))
             .child(self.month_nav_button("month-next", "\u{203a}", next_month, cx));
 
         let mut weekday_header = div().flex().gap_1();
@@ -234,14 +233,14 @@ impl MainWindow {
                     palette::current().titlebar_fg,
                     ACTION_ICON_SIZE,
                 )
-                    .cursor_pointer()
-                    .child("\u{e713}")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            open_settings_window(cx, this.store.clone(), this.scheduler.clone());
-                        }),
-                    ),
+                .cursor_pointer()
+                .child("\u{e713}")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        open_settings_window(cx, this.store.clone(), this.scheduler.clone());
+                    }),
+                ),
             )
             .child(window_button("\u{e921}", WindowControlArea::Min))
             .child(window_button(
@@ -333,7 +332,9 @@ fn shift_month(month: NaiveDate, delta: i32) -> NaiveDate {
 
 /// 当月天数：`month` 为该月 1 号。
 fn days_in_month(month: NaiveDate) -> u32 {
-    shift_month(month, 1).signed_duration_since(month).num_days() as u32
+    shift_month(month, 1)
+        .signed_duration_since(month)
+        .num_days() as u32
 }
 
 /// 当前窗口的位置/尺寸/最大化状态，落盘与关闭时共用同一份采集逻辑。

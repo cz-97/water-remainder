@@ -152,17 +152,16 @@ fn query_month_counts(month: NaiveDate) -> Vec<(NaiveDate, usize)> {
         return Vec::new();
     };
 
-    let (condition, bound): (&str, Vec<Value>) =
-        match (day_bounds(month), day_bounds(next_month)) {
-            (Some((start, _)), Some((end, _))) => (
-                "timestamp >= ?1 AND timestamp < ?2",
-                vec![Value::Integer(start as i64), Value::Integer(end as i64)],
-            ),
-            _ => (
-                "strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') = ?1",
-                vec![Value::Text(month.format("%Y-%m").to_string())],
-            ),
-        };
+    let (condition, bound): (&str, Vec<Value>) = match (day_bounds(month), day_bounds(next_month)) {
+        (Some((start, _)), Some((end, _))) => (
+            "timestamp >= ?1 AND timestamp < ?2",
+            vec![Value::Integer(start as i64), Value::Integer(end as i64)],
+        ),
+        _ => (
+            "strftime('%Y-%m', timestamp, 'unixepoch', 'localtime') = ?1",
+            vec![Value::Text(month.format("%Y-%m").to_string())],
+        ),
+    };
 
     let sql = format!(
         "SELECT date(timestamp, 'unixepoch', 'localtime') AS day,
@@ -209,10 +208,7 @@ fn query_bounds() -> Bounds {
         Err(_) => return empty,
     };
     match stmt.query_row([], |row| {
-        Ok((
-            row.get::<_, Option<i64>>(0)?,
-            row.get::<_, Option<i64>>(1)?,
-        ))
+        Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?))
     }) {
         Ok((min, max)) => Bounds {
             min: min.map(|value| value.max(0) as u64),

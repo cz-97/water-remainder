@@ -143,8 +143,18 @@ impl Render for SettingsWindow {
             .px_4()
             .py_3()
             .rounded_md()
-            .child(setting_copy("提醒图片", "提醒浮层中央的插图，可替换为本地图片"))
-            .child(div().flex().items_center().gap_2().child(change).child(reset));
+            .child(setting_copy(
+                "提醒图片",
+                "提醒浮层中央的插图，可替换为本地图片",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(change)
+                    .child(reset),
+            );
 
         let title_bar = titlebar("设置", window_button("\u{e8bb}", WindowControlArea::Close));
 
@@ -194,10 +204,7 @@ impl Render for SettingsWindow {
                     )
                     // 主题直接跟随系统深浅，没有开关：这里只告诉用户当前生效的是哪一种，
                     // 以及去哪里改。否则“界面没变”看起来像 bug。
-                    .child(setting_copy(
-                        "主题",
-                        "跟随系统的应用颜色设置，无需手动切换",
-                    )),
+                    .child(setting_copy("主题", "跟随系统的应用颜色设置，无需手动切换")),
             )
     }
 }
@@ -239,7 +246,11 @@ fn switch(enabled: bool) -> impl IntoElement {
         )
 }
 
-fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
+fn text_button(
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     let mut button = div()
         .id(id)
         .px_3()

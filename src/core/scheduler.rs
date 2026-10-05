@@ -35,7 +35,9 @@ pub enum RescheduleType {
 
 /// 启动调度线程。间隔由调用方传入（启动时已从设置里读过），
 /// 线程内因此不再自己读一遍 `settings.txt`，两次读之间也不存在不一致窗口。
-pub fn start_scheduler(interval_secs: u64) -> (mpsc::Sender<SchedulerCmd>, mpsc::Receiver<SchedulerEvent>) {
+pub fn start_scheduler(
+    interval_secs: u64,
+) -> (mpsc::Sender<SchedulerCmd>, mpsc::Receiver<SchedulerEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     thread::spawn(move || {

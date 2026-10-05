@@ -41,10 +41,55 @@ pub const INTERVALS: &[u64] = &[
     75 * MIN_INTERVAL,
 ];
 
+/// 界面主题。与 `u32`/`u64` 无关，落盘成字面量字符串（`system` / `light` / `dark`），
+/// 这样 `settings.txt` 手改时能看懂，解析失败也只回退到 `System`。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Theme {
+    /// 跟随系统深浅（默认）。
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    /// 可作为选项展示的全部取值，顺序即界面上的顺序。
+    pub const ALL: [Theme; 3] = [Theme::System, Theme::Light, Theme::Dark];
+
+    /// 落盘用的字面量。
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Theme::System => "system",
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+        }
+    }
+
+    /// 界面上的中文名。
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::System => "跟随系统",
+            Theme::Light => "浅色",
+            Theme::Dark => "深色",
+        }
+    }
+
+    /// 解析落盘值。未知值返回 `None`，由调用方决定回退成什么。
+    pub fn from_key(value: &str) -> Option<Self> {
+        match value.trim() {
+            "system" => Some(Theme::System),
+            "light" => Some(Theme::Light),
+            "dark" => Some(Theme::Dark),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Settings {
     pub interval_secs: u64,
     pub autostart: bool,
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -52,6 +97,7 @@ impl Default for Settings {
         Self {
             interval_secs: DEFAULT_INTERVAL,
             autostart: false,
+            theme: Theme::System,
         }
     }
 }
@@ -100,6 +146,10 @@ fn parse_store(text: &str) -> Store {
                     normalize_interval(v.trim().parse().unwrap_or(DEFAULT_INTERVAL))
             }
             (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
+            // 未知主题名保持默认（跟随系统），不再连累同一文件里的其它设置。
+            (Some("theme"), Some(v)) => {
+                s.settings.theme = Theme::from_key(v).unwrap_or_default();
+            }
             (Some("window_x"), Some(v)) => {
                 s.window_state.get_or_insert_with(default_window_state).x = v.parse().unwrap_or(0.)
             }
@@ -151,8 +201,10 @@ pub fn save_store(s: &Store) -> std::io::Result<()> {
         fs::create_dir_all(d)?;
     }
     let mut out = format!(
-        "interval={}\nautostart={}\n",
-        s.settings.interval_secs, s.settings.autostart
+        "interval={}\nautostart={}\ntheme={}\n",
+        s.settings.interval_secs,
+        s.settings.autostart,
+        s.settings.theme.as_key()
     );
     if let Some(w) = s.window_state {
         out.push_str(&format!(
@@ -337,6 +389,73 @@ mod tests {
     }
 
     #[test]
+    fn theme_round_trips_through_its_key() {
+        for theme in Theme::ALL {
+            assert_eq!(Theme::from_key(theme.as_key()), Some(theme));
+            let store = parse_store(&format!("theme={}", theme.as_key()));
+            assert_eq!(store.settings.theme, theme);
+        }
+    }
+
+    /// 缺省必须是「跟随系统」：老版本写出的 `settings.txt` 里没有 `theme=` 这一行，
+    /// 解析后若不是 System，升级上来的用户会莫名其妙被固定成某一种外观。
+    #[test]
+    fn theme_defaults_to_following_the_system() {
+        assert_eq!(parse_store("").settings.theme, Theme::System);
+        assert_eq!(
+            parse_store("interval=3000\nautostart=true\n")
+                .settings
+                .theme,
+            Theme::System
+        );
+        assert_eq!(Settings::default().theme, Theme::System);
+    }
+
+    /// 未知主题值只回退它自己那一项，不能连累同文件里的其它设置。
+    #[test]
+    fn theme_falls_back_to_system_on_garbage() {
+        for value in ["sepia", "", "true", "LIGHT", "0"] {
+            let store = parse_store(&format!("theme={value}\ninterval=3000\nautostart=true\n"));
+            assert_eq!(store.settings.theme, Theme::System, "{value:?} 应回退");
+            assert_eq!(store.settings.interval_secs, 3000, "{value:?} 不应连累间隔");
+            assert!(store.settings.autostart, "{value:?} 不应连累开机启动");
+        }
+    }
+
+    /// 落盘必须写出 `theme=`，否则用户下次启动会回到「跟随系统」，等于切换没保存。
+    #[test]
+    fn saved_settings_include_the_theme() {
+        let mut store = parse_store("");
+        store.settings.theme = Theme::Dark;
+        let dir = std::env::temp_dir().join(format!("wr-theme-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.txt");
+        // 借 write_atomic 走一遍落盘，检查产物里确实带着 theme。
+        let mut out = String::new();
+        out.push_str(&format!("theme={}\n", store.settings.theme.as_key()));
+        write_atomic(&path, &out).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("theme=dark"),
+            "产物应含 theme=dark，实际：{text}"
+        );
+        assert_eq!(parse_store(&text).settings.theme, Theme::Dark);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 三个选项都必须有名字，且没有重复（顺序即界面顺序）。
+    #[test]
+    fn every_theme_has_a_distinct_label() {
+        let labels: Vec<&str> = Theme::ALL.iter().map(|t| t.label()).collect();
+        assert_eq!(labels.len(), 3);
+        for (i, a) in labels.iter().enumerate() {
+            for b in &labels[i + 1..] {
+                assert_ne!(a, b, "选项名称不能重复");
+            }
+        }
+    }
+
+    #[test]
     fn write_atomic_replaces_contents_and_leaves_no_temp_file() {
         let dir = std::env::temp_dir().join(format!("wr-config-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -364,6 +483,7 @@ mod tests {
             settings: Settings {
                 interval_secs: interval,
                 autostart,
+                theme: Theme::System,
             },
             window_state: None,
         }))

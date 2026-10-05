@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        config::{INTERVALS, Store, update_settings},
+        config::{INTERVALS, Store, Theme, settings_snapshot, update_settings},
         paths::reminder_image_file,
         scheduler::{RescheduleType, SchedulerCmd},
     },
@@ -246,11 +246,150 @@ impl Render for SettingsWindow {
                             .mb_2()
                             .child("外观"),
                     )
-                    // 主题直接跟随系统深浅，没有开关：这里只告诉用户当前生效的是哪一种，
-                    // 以及去哪里改。否则“界面没变”看起来像 bug。
-                    .child(setting_copy("主题", "跟随系统的应用颜色设置，无需手动切换")),
+                    // 主题：三张预览卡片（跟随系统 / 浅色 / 深色），选中项用强调色描边。
+                    // 系统跟随的预览用当前实际生效的那一套色（跟随时就是系统的深浅，
+                    // 强制时就是它自己），所以卡片内容始终是「选了它之后界面长什么样」。
+                    .child(div().text_color(rgb(palette::current().text)).child("主题"))
+                    .child(theme_row(self.store.clone(), cx)),
             )
     }
+}
+
+/// 三张主题预览卡片。返回一整行，卡片本身负责响应点击。
+fn theme_row(store: Arc<Mutex<Store>>, cx: &mut Context<SettingsWindow>) -> impl IntoElement {
+    let row = div().flex().gap_2();
+    // 折叠成 `impl IntoElement` 需要一个确定的类型，所以先把卡片收集起来再渲染。
+    let mut row = row;
+    for theme in Theme::ALL {
+        row = row.child(theme_card(theme, &store, cx));
+    }
+    row
+}
+
+/// 单张主题卡片：上方一个迷你窗口预览，下方是名称 + 选中角标。
+fn theme_card(
+    theme: Theme,
+    store: &Arc<Mutex<Store>>,
+    cx: &mut Context<SettingsWindow>,
+) -> impl IntoElement {
+    let selected = settings_snapshot(store).theme == theme;
+    let store = store.clone();
+    // 预览用哪套色：选中「跟随系统」时按当前实际外观画，另外两个直接用对应那套。
+    let preview_light = match theme {
+        Theme::System => palette::is_light(),
+        Theme::Light => true,
+        Theme::Dark => false,
+    };
+    let preview = palette::for_preview(preview_light);
+
+    let badge = div()
+        .w(px(9.))
+        .h(px(9.))
+        .rounded_full()
+        .bg(rgb(palette::WHITE));
+
+    let card = div()
+        .flex()
+        .flex_1()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .rounded_lg()
+        .overflow_hidden()
+        .border_2()
+        .border_color(rgb(if selected {
+            palette::current().accent
+        } else {
+            palette::current().step_bg
+        }))
+        .bg(rgb(palette::current().step_bg))
+        .cursor_pointer()
+        // 悬浮时把未选中的描边提亮一点，给出「可以点」的暗示。
+        .when(!selected, |this| {
+            this.hover(|s| s.border_color(rgb(palette::current().row_hover)))
+        })
+        .child(theme_swatch(preview))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_sm().child(theme.label()))
+                // 选中角标紧挨文字，占位固定，不让选中/未选中导致文字左右跳动。
+                .child(
+                    div()
+                        .w(px(9.))
+                        .h(px(9.))
+                        .when(selected, |this| this.child(badge)),
+                ),
+        );
+
+    card.on_mouse_down(
+        MouseButton::Left,
+        cx.listener(move |this, _, _, cx| {
+            match update_settings(&store, |settings| settings.theme = theme) {
+                Ok(()) => {
+                    // 立即生效：把新主题写进全局并让所有窗口重绘，主窗/浮层立刻跟着变。
+                    palette::set_preference(theme);
+                    cx.refresh_windows();
+                    this.save_error = None;
+                }
+                Err(error) => this.save_error = Some(error.to_string()),
+            }
+            cx.notify();
+        }),
+    )
+}
+
+/// 迷你窗口预览：一条标题栏 + 两条内容横杠 + 一个小色块，用对应主题的配色画。
+fn theme_swatch(preview: &palette::Palette) -> impl IntoElement {
+    div()
+        .h(px(46.))
+        .w_full()
+        .rounded_md()
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .bg(rgb(preview.window_bg))
+        // 标题栏
+        .child(div().h(px(10.)).w_full().bg(rgb(preview.titlebar_bg)))
+        // 内容：一个小方块 + 两条横杠，暗示主界面布局
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .rounded_sm()
+                        .bg(rgb(preview.accent)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .flex_1()
+                        .child(
+                            div()
+                                .h(px(3.))
+                                .w(px(38.))
+                                .rounded_full()
+                                .bg(rgb(preview.text)),
+                        )
+                        .child(
+                            div()
+                                .h(px(3.))
+                                .w(px(26.))
+                                .rounded_full()
+                                .bg(rgb(preview.text_muted)),
+                        ),
+                ),
+        )
 }
 
 fn setting_copy(title: &'static str, description: &'static str) -> impl IntoElement {

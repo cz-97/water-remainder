@@ -39,6 +39,9 @@ fn main() {
             gpui_kit::init(cx);
             let store = Arc::new(Mutex::new(load_store()));
             let settings = settings_snapshot(&store);
+            // 把用户选的主题写进全局配色，早于任何窗口创建 —— 否则首帧会用默认的
+            // 「跟随系统」渲染出一瞬，再被用户设置纠正（肉眼可见的闪一下）。
+            ui::palette::set_preference(settings.theme);
             platform::enable_system_menu_theme();
             // 启动时把注册表对齐到设置里的 `autostart`。失败只意味着这次没对上，
             // 不影响程序使用，因此提示但不中断：用户至少能从弹出框知道原因。

@@ -164,24 +164,27 @@
   - 「喝了」写入记录并 `Reschedule(Drink)`，「跳过」仅关闭窗口。
   - **中央插图可换**：默认用内置 `water.png`；若数据目录下存在 `reminder.img`（由设置窗「更换图片」写入）则优先用它，按文件头魔数解码（png / jpg / gif / bmp / webp / tif / ico），无法解析时回退内置图。
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
-- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）+ 一个只说明「主题跟随系统」的静态行。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。窗口高度已为新增的「外观」分组从 420 调到 520，并给内容区加了 `overflow_y_scroll`（需先 `.id(..)`，`overflow_*` 是 `InteractiveElement` 的方法），以后再加设置项不会把底部裁掉。
-  - **失败要当场说**：`save_error` 字段存最近一次失败原因，正文最上方渲染一条提示。失败分两处：`update_settings` 写文件失败，以及 `platform::set_autostart` 写注册表失败 —— 后者会把设置回滚再提示，否则开关显示「已开启」而 Run 键没写进去，下次开机不会启动。
+- `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）+ **三张主题预览卡片**（跟随系统 / 浅色 / 深色，见下）。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。窗口高度已为新增的「外观」分组从 420 调到 520，并给内容区加了 `overflow_y_scroll`（需先 `.id(..)`，`overflow_*` 是 `InteractiveElement` 的方法），以后再加设置项不会把底部裁掉。
+  - **失败要当场说**：`save_error` 字段存最近一次失败原因，正文最上方渲染一条提示。失败分两处：`update_settings` 写文件失败，以及 `platform::set_autostart` 写注册表失败 —— 后者会把设置回滚再提示，否则开关显示「已开启」而 Run 键没写进去，下次开机不会启动。主题切换同样：写盘成功才 `set_preference` + `refresh_windows()`。
   - **只有真的成功才动下游**：`set_interval` 落盘成功后才发 `ChangeInterval`，否则本次运行的节奏会和下次启动读到的不一致。
   - `custom_image` 缓存「是否已自定义」，避免每帧 `path.exists()`；两个按钮是它唯一的写入点，写完各自刷新这个字段。
 
 `ui/mod.rs` 是界面共享模块：配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、外观订阅 `follow_system_appearance`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有四样：`id`、悬停底色、悬停前景色与图标字号（控制键 12、功能键 14）—— 悬停前景色也要传，是因为浅色外观下深色图标落在红色关闭键上会看不清。时间戳换算与文案格式化（`now` / `local_date` / `day_bounds` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now` / `format_date`）**不在这一层**，而在 `core/time.rs`：`core::data` 也要按本地日切分查询区间，放在 `ui` 会让领域层反向依赖界面。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
-**主题跟随系统深浅（`palette`）**
+**主题：跟随系统 / 浅色 / 深色（`palette`）**
 
-配色不再是编译期常量，而是深浅两张表 + 一个 `AtomicU8` 记录当前外观。`palette::current()` 返回其中一张的引用，所有取色写 `rgb(palette::current().accent)`；改配色只需动这一个模块。
+配色不再是编译期常量，而是深浅两张表 + 两个 `AtomicU8`：一个记**用户选的主题**（`core::config::Theme`），一个记**系统当前外观**。真正生效的外观由两者合成 —— 用户指定了浅/深就听用户的，否则听系统的（`palette::is_light`）。`palette::current()` 返回对应那张表的引用，所有取色写 `rgb(palette::current().accent)`；改配色只需动这一个模块。
 
-- `palette::set_appearance(appearance)` 把 gpui 的 `WindowAppearance`（`Vibrant*` 合并到对应普通变体）折成一个位存进全局。
+- `core::config::Theme`（`System`/`Light`/`Dark`）落盘成字面量 `theme=system|light|dark`，未知值回退 `System`。**缺省必须是 `System`** —— 旧版本 `settings.txt` 没有这一行，解析错会让升级上来的用户莫名其妙被固定成某一种外观。
+- `palette::set_preference(theme)` 记用户选择；`main.rs` 在**创建任何窗口之前**就写入，否则首帧会按默认的「跟随系统」画一帧再被纠正，肉眼可见地闪一下。
+- `palette::for_preview(light)` 按「是否浅色」直接取表，**不看用户当前选了什么** —— 只给设置窗的主题预览卡片用，它要在界面上同时画出三张不同深浅的迷你窗口，而此时真正生效的只有一张。
 - `ui::follow_system_appearance(window)` 是**每个窗口**都要调一次的订阅入口：先用 `window.appearance()` 校正一次全局值（进程可能长时间没有窗口，期间系统切换深浅就没人更新过配色），再 `observe_window_appearance` 订阅后续变化并 `window.refresh()` 重绘。`Subscription` 是 RAII 守卫，不 `detach()` 会在函数返回时注销掉。
 - **必须逐窗订阅**：gpui 的外观观察者是按窗口注册的，Windows 侧来自 `ImmersiveColorSet` 系统广播，每个顶层窗口各收到一份；而配色是全局的，所以三个窗口都订阅，谁先收到都行。
-- 颜色只在 GPUI 主线程上被读（每次 `render`）与写（观察者回调），所以 `AtomicU8` 足够，不需要锁也不存在撕裂。
+- 颜色只在 GPUI 主线程上被读（每次 `render`）与写（观察者回调 / 设置窗改主题），所以 `AtomicU8` 足够，不需要锁也不存在撕裂。
+- 设置窗里选主题：写盘成功后才 `palette::set_preference` + `cx.refresh_windows()`（**三个窗口都要立刻换色**），失败则回滚并走既有的错误提示条。
+- 设置窗的主题选择器是**三张预览卡片**（迷你窗口图 + 名称 + 选中角标），选中项用强调色描边；预览图用 `palette::for_preview` 画对应深浅，让用户在点之前就看到「选了它之后界面长什么样」。
 - 提醒浮层（`palette::overlay`）**刻意不随外观变化**：整屏遮罩压暗桌面才能让水杯插图与白字立住，浅色外观下换成透明会让插图整个糊进白底。只有「喝了」按钮用界面强调色（浅色下为深蓝，仍是蓝底白字）。
 - 热力图 1..=8 级两套外观共用同一段蓝（蓝到足够深时在白底与深底上都立得住），只有 0 次那一档的底色与数字随外观变。
-- 设置窗不提供主题开关，只在「外观」分组里写明跟随系统，避免「界面没变」被当成 bug。
 
 **5. 平台适配层（`platform/`）**
 

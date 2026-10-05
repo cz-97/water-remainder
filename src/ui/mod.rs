@@ -6,13 +6,16 @@ use gpui_kit::{
     Div, FontWeight, ImageFormat, Stateful, Window, WindowControlArea, div, prelude::*, px, rgb,
 };
 
-/// 界面配色唯一来源。深浅两套随**系统外观**切换（跟随系统深浅，不是强调色）：
-/// [`palette::set_appearance`] 由 [`follow_system_appearance`] 在窗口创建时写入一次、
-/// 之后每次系统切换深浅再写一次，下面所有取色函数读的都是当前这一份。
+/// 界面配色唯一来源。深浅两套切换由**用户设置**决定（跟随系统 / 强制浅色 / 强制深色）：
+/// [`palette::set_preference`] 记录用户选择（设置窗写盘时一并写入），
+/// [`palette::set_system_appearance`] 由 [`follow_system_appearance`] 在窗口创建时写入、
+/// 之后每次系统切换深浅再写一次。只有跟随系统时两者才会共同决定外观 ——
+/// 用户强制了浅/深，系统切深浅就不该再改动界面。
 ///
 /// 全局只存一个外观值就够：颜色只在 GPUI 主线程上被读（每次 `render`）与写
 /// （外观观察者回调），`AtomicU8` 既无锁也不会撕裂。
 pub mod palette {
+    use crate::core::config::Theme;
     use gpui_kit::WindowAppearance;
     use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -90,26 +93,63 @@ pub mod palette {
         pub selection_ring: u32,
     }
 
-    /// `0` 深色 / `1` 浅色。初值是深色，进程启动后第一个窗口创建时即被校正。
-    static APPEARANCE: AtomicU8 = AtomicU8::new(0);
+    /// 用户选的主题：`0` 跟随系统 / `1` 浅色 / `2` 深色。初值跟随系统。
+    static PREFERENCE: AtomicU8 = AtomicU8::new(0);
 
-    /// 记录当前系统外观。`WindowAppearance` 的 `Vibrant` 变体只在 macOS 有意义，
+    /// 系统当前外观：`0` 深色 / `1` 浅色。**只在跟随系统时才决定最终外观**；
+    /// 进程启动后第一个窗口创建时即被校正。
+    static SYSTEM_LIGHT: AtomicU8 = AtomicU8::new(0);
+
+    /// 记录系统外观。`WindowAppearance` 的 `Vibrant` 变体只在 macOS 有意义，
     /// 这里与对应的普通变体合并处理。
-    pub fn set_appearance(appearance: WindowAppearance) {
+    pub fn set_system_appearance(appearance: WindowAppearance) {
         let light = match appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => false,
             WindowAppearance::Light | WindowAppearance::VibrantLight => true,
         };
-        APPEARANCE.store(light as u8, Ordering::Relaxed);
+        SYSTEM_LIGHT.store(light as u8, Ordering::Relaxed);
+    }
+
+    /// 记录用户选的主题。
+    pub fn set_preference(theme: Theme) {
+        PREFERENCE.store(
+            match theme {
+                Theme::System => 0,
+                Theme::Light => 1,
+                Theme::Dark => 2,
+            },
+            Ordering::Relaxed,
+        );
+    }
+
+    /// 当前生效的主题（用户选择）。
+    pub fn preference() -> Theme {
+        match PREFERENCE.load(Ordering::Relaxed) {
+            1 => Theme::Light,
+            2 => Theme::Dark,
+            _ => Theme::System,
+        }
+    }
+
+    /// 此刻界面实际该用哪张配色表：用户指定了浅/深就听用户的，否则听系统的。
+    pub fn is_light() -> bool {
+        match preference() {
+            Theme::Light => true,
+            Theme::Dark => false,
+            Theme::System => SYSTEM_LIGHT.load(Ordering::Relaxed) == 1,
+        }
     }
 
     /// 当前外观的配色表。所有取色都从这里读，用法 `rgb(palette::current().window_bg)`。
     pub fn current() -> &'static Palette {
-        if APPEARANCE.load(Ordering::Relaxed) == 1 {
-            &LIGHT
-        } else {
-            &DARK
-        }
+        if is_light() { &LIGHT } else { &DARK }
+    }
+
+    /// 按「是否浅色」直接取表，不看用户当前选了什么。
+    /// 只给设置窗的**主题预览卡片**用 —— 它要在界面上同时画出三张不同深浅的
+    /// 迷你窗口，而此时生效的只有其中一张。
+    pub fn for_preview(light: bool) -> &'static Palette {
+        if light { &LIGHT } else { &DARK }
     }
 
     // 与外观无关的颜色：对比色与「危险」色，两套外观下取同一个值。
@@ -164,18 +204,21 @@ pub mod palette {
     }
 }
 
-/// 让一个窗口跟随系统深浅：外观变化时更新全局配色并重绘。
+/// 让一个窗口跟随系统深浅：系统外观变化时更新全局配色并重绘。
 ///
-/// 必须**每个窗口**都调一次：gpui 的外观观察者是按窗口注册的（Windows 侧来自
+/// **必须每个窗口都调一次**：gpui 的外观观察者是按窗口注册的（Windows 侧来自
 /// `ImmersiveColorSet` 的系统广播，每个顶层窗口各收到一份），而配色是全局的。
 /// `Subscription` 是 RAII 守卫，不 `detach()` 会在这个函数返回时就被注销掉。
+///
+/// 用户强制了浅色/深色时，系统切深浅不会改变外观 —— `palette::is_light` 会以
+/// 用户选择为准，这里照常记录系统外观只是为了让「切回跟随系统」时立刻拿到当前值。
 pub fn follow_system_appearance(window: &mut Window) {
-    // 窗口创建时 gpui 会现读一次系统外观，用它校正全局值：进程运行期间可能
-    // 一个窗口都没开过（托盘常驻），期间切换深浅就没有任何人更新过配色。
-    palette::set_appearance(window.appearance());
+    // 窗口创建时 gpui 会现读一次系统外观：进程运行期间可能一个窗口都没开过
+    // （托盘常驻），期间切换深浅就没有任何人更新过这个值。
+    palette::set_system_appearance(window.appearance());
     window
         .observe_window_appearance(|window, _| {
-            palette::set_appearance(window.appearance());
+            palette::set_system_appearance(window.appearance());
             window.refresh();
         })
         .detach();

@@ -1,2 +1,7 @@
 /target
 .workbuddy
+
+# 调试时手工重定向产生的日志（cargo run > run.log）。测试结束就该删掉，
+# 这里再兜一层，免得哪天又被误提交进来。
+run.log
+run.err.log

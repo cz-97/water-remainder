@@ -4,6 +4,18 @@ version = "0.6.4"
 edition = "2024"
 authors = ["cz-97"]
 
+# 让警告有牙齿：clippy 现在就是干净的，这里把它钉住，以后新增的警告会在
+# `cargo clippy` 里直接报错，而不是被淹没在输出里慢慢堆积。
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+correctness = "deny"
+suspicious = "deny"
+perf = "warn"
+
+# `unsafe` 全部集中在 `platform/mod.rs`，本项目用它调 Win32；那个文件是唯一
+# 允许出现 unsafe 的地方。这里不全局开 `unsafe_code` 警告——15 处调用只会刷出
+# 同样多的噪音，把真警告淹掉。
+
 [dependencies]
 gpui-kit = { version = "0.6", default-features = false }
 tray-icon = "0.19"

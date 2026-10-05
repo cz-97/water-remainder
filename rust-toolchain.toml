@@ -1,0 +1,11 @@
+[toolchain]
+# 固定到 stable 通道，并声明本项目需要的组件。
+#
+# 这里**刻意不写具体版本号**（如 1.97.1）：实测写成精确版本会让 rustup 试图
+# 下载那个特定版本，本地没装过就直接 404，连 cargo check 都跑不起来 ——
+# 一个只想声明「需要 rustfmt/clippy」的配置文件反而把构建搞坏了。
+# 写 stable 则直接使用本地已安装的 stable，不触发任何网络请求。
+#
+# 下界说明：edition 2024 要求 rustc >= 1.85。
+channel = "stable"
+components = ["rustfmt", "clippy"]

@@ -3,10 +3,10 @@ use crate::{
         config::{Store, WindowState, save_store},
         data::{DayCounts, day_detail, earliest_day, month_counts},
         scheduler::SchedulerCmd,
+        time::{format_clock, format_date, local_date, now, relative_to_now},
     },
     ui::{
-        ACTION_ICON_SIZE, calendar_color, calendar_level, format_clock, format_date, local_date,
-        now, palette, relative_to_now,
+        ACTION_ICON_SIZE, calendar_color, calendar_level, palette,
         settings_window::{close_settings_window, open_settings_window},
         titlebar, titlebar_button, window_button,
     },

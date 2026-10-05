@@ -74,45 +74,54 @@ fn settings_file() -> PathBuf {
 }
 
 pub fn load_store() -> Store {
+    match fs::read_to_string(settings_file()) {
+        Ok(text) => parse_store(&text),
+        // 文件不存在（首次启动）或读不出来：全部走默认值。
+        Err(_) => parse_store(""),
+    }
+}
+
+/// 把 `settings.txt` 的文本解析成 `Store`。
+///
+/// 抽成纯函数是为了能直接对「损坏时逐行回退默认值」这条约定写测试：文件是纯文本、
+/// 用户可手改，所以未知键要忽略、解析失败的单个值只影响它自己那一项，不能连累
+/// 同一文件里的其它设置。
+fn parse_store(text: &str) -> Store {
     let mut s = Store {
         settings: Settings::default(),
         window_state: None,
     };
-    if let Ok(text) = fs::read_to_string(settings_file()) {
-        for line in text.lines() {
-            let mut p = line.splitn(2, '=');
-            match (p.next(), p.next()) {
-                (Some("interval"), Some(v)) => {
-                    // 解析失败与越界都收敛到最近的合法档位，见 `normalize_interval`。
-                    s.settings.interval_secs =
-                        normalize_interval(v.trim().parse().unwrap_or(DEFAULT_INTERVAL))
-                }
-                (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
-                (Some("window_x"), Some(v)) => {
-                    s.window_state.get_or_insert_with(default_window_state).x =
-                        v.parse().unwrap_or(0.)
-                }
-                (Some("window_y"), Some(v)) => {
-                    s.window_state.get_or_insert_with(default_window_state).y =
-                        v.parse().unwrap_or(0.)
-                }
-                (Some("window_width"), Some(v)) => {
-                    s.window_state
-                        .get_or_insert_with(default_window_state)
-                        .width = v.parse().unwrap_or(600.)
-                }
-                (Some("window_height"), Some(v)) => {
-                    s.window_state
-                        .get_or_insert_with(default_window_state)
-                        .height = v.parse().unwrap_or(800.)
-                }
-                (Some("window_maximized"), Some(v)) => {
-                    s.window_state
-                        .get_or_insert_with(default_window_state)
-                        .maximized = v == "true"
-                }
-                _ => {}
+    for line in text.lines() {
+        let mut p = line.splitn(2, '=');
+        match (p.next(), p.next()) {
+            (Some("interval"), Some(v)) => {
+                // 解析失败与越界都收敛到最近的合法档位，见 `normalize_interval`。
+                s.settings.interval_secs =
+                    normalize_interval(v.trim().parse().unwrap_or(DEFAULT_INTERVAL))
             }
+            (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
+            (Some("window_x"), Some(v)) => {
+                s.window_state.get_or_insert_with(default_window_state).x = v.parse().unwrap_or(0.)
+            }
+            (Some("window_y"), Some(v)) => {
+                s.window_state.get_or_insert_with(default_window_state).y = v.parse().unwrap_or(0.)
+            }
+            (Some("window_width"), Some(v)) => {
+                s.window_state
+                    .get_or_insert_with(default_window_state)
+                    .width = v.parse().unwrap_or(600.)
+            }
+            (Some("window_height"), Some(v)) => {
+                s.window_state
+                    .get_or_insert_with(default_window_state)
+                    .height = v.parse().unwrap_or(800.)
+            }
+            (Some("window_maximized"), Some(v)) => {
+                s.window_state
+                    .get_or_insert_with(default_window_state)
+                    .maximized = v == "true"
+            }
+            _ => {}
         }
     }
     s
@@ -174,5 +183,121 @@ fn default_window_state() -> WindowState {
         width: 600.,
         height: 800.,
         maximized: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `settings.txt` 可手改，非法间隔必须被收敛到表内档位，否则 0 会让调度线程
+    /// 退化成每秒发一次提醒的紧循环，表外值会让设置窗步进器显示错档。
+    #[test]
+    fn normalize_interval_accepts_table_values_unchanged() {
+        for &seconds in INTERVALS {
+            assert_eq!(normalize_interval(seconds), seconds);
+        }
+    }
+
+    #[test]
+    fn normalize_interval_collapses_zero_and_absurd_values() {
+        assert_eq!(normalize_interval(0), INTERVALS[0]);
+        assert_eq!(normalize_interval(u64::MAX), *INTERVALS.last().unwrap());
+    }
+
+    /// 正好落在两档中间时取下界 —— 文档明确写了这条，且它是任意的但必须稳定。
+    #[test]
+    fn normalize_interval_breaks_ties_downward() {
+        let (lower, upper) = (INTERVALS[3], INTERVALS[4]);
+        let midpoint = (lower + upper) / 2;
+        assert_eq!(
+            midpoint - lower,
+            upper - midpoint,
+            "构造用例时两档必须等距，否则测不到平局"
+        );
+        assert_eq!(normalize_interval(midpoint), lower);
+    }
+
+    #[test]
+    fn normalize_interval_picks_the_nearest_bucket() {
+        assert_eq!(normalize_interval(INTERVALS[2] + 1), INTERVALS[2]);
+        assert_eq!(normalize_interval(INTERVALS[2] - 1), INTERVALS[2]);
+    }
+
+    #[test]
+    fn parse_store_defaults_on_empty_text() {
+        let store = parse_store("");
+        assert_eq!(store.settings.interval_secs, DEFAULT_INTERVAL);
+        assert!(!store.settings.autostart);
+        assert!(store.window_state.is_none());
+    }
+
+    /// 损坏的值只影响它自己那一项，同一文件里的其它设置必须保住 ——
+    /// 否则一次手改失误会把用户的全部设置清空。
+    #[test]
+    fn parse_store_keeps_good_keys_when_one_value_is_corrupt() {
+        let store = parse_store("interval=not-a-number\nautostart=true\n");
+        assert_eq!(store.settings.interval_secs, DEFAULT_INTERVAL);
+        assert!(store.settings.autostart, "坏值不能连累 autostart");
+    }
+
+    #[test]
+    fn parse_store_ignores_unknown_and_malformed_lines() {
+        let store = parse_store("garbage\n=5\nunknown=1\ninterval=2700\n");
+        assert_eq!(store.settings.interval_secs, 2700);
+    }
+
+    #[test]
+    fn parse_store_reads_window_state_and_maximized_flag() {
+        let store = parse_store(
+            "window_x=100\nwindow_y=200\nwindow_width=640\nwindow_height=900\nwindow_maximized=true\n",
+        );
+        let window = store.window_state.expect("应解析出窗口状态");
+        assert_eq!(window.x, 100.);
+        assert_eq!(window.y, 200.);
+        assert_eq!(window.width, 640.);
+        assert_eq!(window.height, 900.);
+        assert!(window.maximized);
+    }
+
+    /// `autostart` 只认字面量 `true`：写 `1` / `True` 不能被当成开启，
+    /// 否则启动时会把注册表 Run 键设成与设置显示不一致的状态。
+    #[test]
+    fn parse_store_treats_only_literal_true_as_autostart_on() {
+        for text in [
+            "autostart=1",
+            "autostart=True",
+            "autostart=yes",
+            "autostart=",
+        ] {
+            assert!(
+                !parse_store(text).settings.autostart,
+                "{text:?} 不应被当成开启"
+            );
+        }
+        assert!(parse_store("autostart=true").settings.autostart);
+    }
+
+    #[test]
+    fn write_atomic_replaces_contents_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("wr-config-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.txt");
+
+        write_atomic(&path, "first-version-longer").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first-version-longer");
+        // 覆盖写一个更短的内容：旧内容不能有残留。
+        write_atomic(&path, "second").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "settings.txt")
+            .collect();
+        assert!(leftovers.is_empty(), "目录里残留了临时文件：{leftovers:?}");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

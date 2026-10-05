@@ -1,5 +1,5 @@
 use crate::core::paths::app_dir;
-use crate::ui::{day_bounds, local_date, now};
+use crate::core::time::{day_bounds, local_date, now};
 use chrono::{Datelike, Months, NaiveDate};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;

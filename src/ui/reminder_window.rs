@@ -3,10 +3,9 @@ use crate::{
         data::{last_time, save_time},
         paths::reminder_image_file,
         scheduler::{RescheduleType, SchedulerCmd},
+        time::{format_clock_secs, format_day_label, format_span, local_date, now},
     },
-    ui::{
-        format_clock_secs, format_day_label, format_span, image_format, local_date, now, palette,
-    },
+    ui::{image_format, palette},
 };
 use gpui_kit::{
     App, Context, FontWeight, Image, ImageFormat, MouseButton, Rems, Window,

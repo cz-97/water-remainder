@@ -2,3 +2,4 @@ pub mod config;
 pub mod data;
 pub mod paths;
 pub mod scheduler;
+pub mod time;

@@ -49,7 +49,7 @@ impl MainWindow {
         let month = self.view_month;
         let days = days_in_month(month);
         // 周一为每周首列：0 = 周一。
-        let leading = month.weekday().num_days_from_monday() as u32;
+        let leading = month.weekday().num_days_from_monday();
         // 左箭头：逐月后退，退到最早有记录的月份为止，再往前则置灰。
         let earliest_month = input.earliest.map(|day| day.with_day(1).unwrap_or(day));
         let prev_month = match earliest_month {

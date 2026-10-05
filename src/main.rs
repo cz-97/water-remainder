@@ -94,9 +94,7 @@ fn main() {
                             } = event
                             {
                                 let records = shared_store.clone();
-                                let _ = cx.update(|cx| {
-                                    open_main_window(cx, records, scheduler_tx.clone())
-                                });
+                                cx.update(|cx| open_main_window(cx, records, scheduler_tx.clone()));
                             }
                         }
                         AppEvent::Menu(event) => {
@@ -126,5 +124,5 @@ fn show_reminder(
     scheduler: mpsc::Sender<SchedulerCmd>,
     remaining: u64,
 ) {
-    let _ = cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
+    cx.update(|cx| open_reminder_window(cx, scheduler, remaining));
 }

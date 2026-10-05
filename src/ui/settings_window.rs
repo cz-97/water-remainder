@@ -19,6 +19,11 @@ use std::{
 pub struct SettingsWindow {
     store: Arc<Mutex<Store>>,
     scheduler: mpsc::Sender<SchedulerCmd>,
+    /// 是否已自定义提醒图片。**缓存**而不是每帧 `path.exists()`：`render` 每次重绘都会
+    /// 跑一遍，而 GPUI 重绘相当频繁（悬停、窗口尺寸变化、外观切换……），不该为此
+    /// 每帧做一次 `stat` 系统调用。它只在「更换图片 / 恢复默认」两个动作后变化，
+    /// 而那两处就是唯一的写入点，所以在这里跟着改即可。
+    custom_image: bool,
 }
 
 impl Render for SettingsWindow {
@@ -112,16 +117,18 @@ impl Render for SettingsWindow {
             .child(setting_copy("提醒间隔", "两次提醒之间的等待时间"))
             .child(interval);
 
-        let custom = reminder_image_file().exists();
+        let custom = self.custom_image;
         let change = text_button("change-image", "更换", true).on_mouse_down(
             MouseButton::Left,
-            cx.listener(|_, _, _, cx| {
-                if let Some(path) = platform::pick_image_file() {
-                    if let Ok(bytes) = fs::read(&path) {
-                        if image_format(&bytes).is_some() {
-                            let _ = fs::write(reminder_image_file(), &bytes);
-                        }
-                    }
+            cx.listener(|this, _, _, cx| {
+                if let Some(path) = platform::pick_image_file()
+                    && let Ok(bytes) = fs::read(&path)
+                    && image_format(&bytes).is_some()
+                {
+                    let _ = fs::write(reminder_image_file(), &bytes);
+                    // 写完重新判定一次真实状态：写失败时不能显示成「已自定义」，
+                    // 否则用户会以为换图成功了。这里是一次点击一次，不做每帧 stat。
+                    this.custom_image = reminder_image_file().exists();
                 }
                 cx.notify();
             }),
@@ -130,8 +137,9 @@ impl Render for SettingsWindow {
         if custom {
             reset = reset.on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_, _, _, cx| {
+                cx.listener(|this, _, _, cx| {
                     let _ = fs::remove_file(reminder_image_file());
+                    this.custom_image = reminder_image_file().exists();
                     cx.notify();
                 }),
             );
@@ -336,7 +344,13 @@ pub fn open_settings_window(
         },
         move |window, cx| {
             crate::ui::follow_system_appearance(window);
-            cx.new(|_| SettingsWindow { store, scheduler })
+            // 只在开窗时判一次文件是否存在，之后由两个按钮维护这份缓存。
+            let custom_image = reminder_image_file().exists();
+            cx.new(|_| SettingsWindow {
+                store,
+                scheduler,
+                custom_image,
+            })
         },
     );
 }

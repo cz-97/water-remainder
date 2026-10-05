@@ -8,6 +8,7 @@
 
 1. **编译检查** — `cargo check --offline`
    - 失败就地修复并重新检查，**通过之前不要进入后续步骤**。
+   - 同时跑 `cargo test --offline`：纯函数（分档、格式化、本地日区间、设置解析与原子写）都有测试，改了这些地方必须让测试保持通过。
 2. **运行验证** — `cargo run`
    - 仅在第 1 步通过后执行。
    - 这是常驻托盘的 GUI 程序（单实例、命名互斥体）：若旧进程仍在运行，**先结束它**再 `cargo run`，否则新进程会因互斥体已存在而直接退出。结束命令：`taskkill /F /IM water-remainder.exe`。
@@ -130,7 +131,7 @@
 - **某天的明细一天最多查一次**：结果进 `DETAILS`，此后（含窗口重绘）都命中内存。`save_time()` 也只在「那天的明细已经加载过」时才把新时间戳追加进已缓存的那条，**绝不因为写入而顺带加载明细**。
 - **三层缓存都只增不减、不做失效**：若程序运行期间由外部直接改写 `data.db`，界面不会感知（重启进程即重新加载）。
 
-于是 GPUI「每次 draw 都重跑 `render()`」不再有代价：日历每格是 `counts.count(day)`（`BTreeMap` 查找），时间轴是选中日明细的 `Arc` 克隆，都不产生 `SELECT`（切月仅在该月首次访问时多一次走索引的月度区间查询）。代价是日期边界要由 chrono 自己算（`ui::day_bounds()` 给出该本地日的 `[00:00, 次日 00:00)`），换来的是「按天取明细」永远是一次索引区间查找 —— 比按 `date()` 函数过滤快近两个数量级，也不必给表加 `day` 列（SQLite 不允许生成列里用 `localtime`，`INSERT` 会直接报非确定性错误）。
+于是 GPUI「每次 draw 都重跑 `render()`」不再有代价：日历每格是 `counts.count(day)`（`BTreeMap` 查找），时间轴是选中日明细的 `Arc` 克隆，都不产生 `SELECT`（切月仅在该月首次访问时多一次走索引的月度区间查询）。代价是日期边界要由 chrono 自己算（`core::time::day_bounds()` 给出该本地日的 `[00:00, 次日 00:00)`），换来的是「按天取明细」永远是一次索引区间查找 —— 比按 `date()` 函数过滤快近两个数量级，也不必给表加 `day` 列（SQLite 不允许生成列里用 `localtime`，`INSERT` 会直接报非确定性错误）。
 
 **4. UI 层**
 
@@ -149,7 +150,7 @@
   - 浮层已经存在时**不静默返回**，而是原地更新 `last_drink` / `next_reminder` 并重绘。浮层有可能是在屏幕没亮、显示器正在重枚举的那个瞬间被创建出来的——用户看不见它，而它除了被点击之外不会被自动关闭，静默返回会让此后每一次提醒都被吞掉，直到重启进程。
 - `ui/settings_window.rs` — 间隔步进器（受 `INTERVALS` 边界约束，越界时按钮置灰）+ 开机启动开关 + 提醒图片「更换 / 恢复默认」（无自定义图时「恢复默认」置灰，据此区分当前是否已自定义）+ 一个只说明「主题跟随系统」的静态行。间隔与开机启动走 `config::update_settings(&store, |settings| ...)`：加锁、改值、落盘收在这一个函数里；图片更换则把选中的图片复制到 `core::paths::reminder_image_file()`（仅识别得到格式的图片，取消或非图片则不改动），恢复默认即删除该文件。间隔变更随后向调度器发送 `ChangeInterval`。窗口高度已为新增的「外观」分组从 420 调到 520，并给内容区加了 `overflow_y_scroll`（需先 `.id(..)`，`overflow_*` 是 `InteractiveElement` 的方法），以后再加设置项不会把底部裁掉。
 
-`ui/mod.rs` 是共享工具模块：时间戳换算（`now` / `local_date` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now`）、配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、外观订阅 `follow_system_appearance`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有四样：`id`、悬停底色、悬停前景色与图标字号（控制键 12、功能键 14）—— 悬停前景色也要传，是因为浅色外观下深色图标落在红色关闭键上会看不清。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
+`ui/mod.rs` 是界面共享模块：配色表 `palette`、热力图取色 `calendar_color`、图片格式探测 `image_format`、外观订阅 `follow_system_appearance`、以及自绘标题栏的三个部件 —— `titlebar()`（左侧可拖拽标题 + 右侧按钮槽）、`titlebar_button()`（**标题栏图标按钮的唯一样式来源**：46×38、图标居中、悬停换底色，尺寸与字体来自文件顶部的 `TITLEBAR_*` / `ICON_FONT` 常量）与 `window_button()`（在共用样式之上附加 `WindowControlArea` 的最小化/最大化/关闭语义）。主窗标题栏右侧的**设置齿轮直接复用 `titlebar_button()`**，所以标题栏按钮要改外观只需动这一处；可变的只有四样：`id`、悬停底色、悬停前景色与图标字号（控制键 12、功能键 14）—— 悬停前景色也要传，是因为浅色外观下深色图标落在红色关闭键上会看不清。时间戳换算与文案格式化（`now` / `local_date` / `day_bounds` / `format_clock` / `format_clock_secs` / `format_span` / `format_day_label` / `relative_to_now` / `format_date`）**不在这一层**，而在 `core/time.rs`：`core::data` 也要按本地日切分查询区间，放在 `ui` 会让领域层反向依赖界面。其中 `format_span` 负责把秒数写成「1 天 2 小时 15 分 30 秒」，`format_day_label` 负责把日期转成「昨天 / 前天 / N 天前」。
 
 **主题跟随系统深浅（`palette`）**
 
@@ -207,13 +208,14 @@
 ```
 src/
 ├── main.rs                  入口、单实例、事件汇聚循环
-├── core/                    领域逻辑（配置、存储、调度，无 UI 依赖）
+├── core/                    领域逻辑（配置、存储、调度、时间，无 UI 依赖）
 │   ├── config.rs            设置模型与 settings.txt 读写、间隔常量表
 │   ├── data.rs              SQLite 连接池、按月聚合 + 按需明细、记录读写
 │   ├── paths.rs             应用数据目录（%APPDATA%\water-remainder）
-│   └── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
+│   ├── scheduler.rs         调度线程与 SchedulerCmd / SchedulerEvent 协议
+│   └── time.rs              时间戳换算、本地日区间、文案格式化（ui 与 data 共用）
 ├── ui/                      界面（GPUI View 与共享部件）
-│   ├── mod.rs               时间工具、palette 配色与外观订阅、标题栏与共用按钮样式
+│   ├── mod.rs               palette 配色与外观订阅、标题栏与共用按钮样式
 │   ├── main_window.rs       主窗口：月历 + 时间轴
 │   ├── reminder_window.rs   全屏提醒浮层
 │   └── settings_window.rs   设置窗口
@@ -228,6 +230,9 @@ src/
 ```bash
 # 调试运行
 cargo run
+
+# 单元测试（纯函数：分档、格式化、本地日区间、设置解析与原子写）
+cargo test
 
 # 发布构建（opt-level="z" + fat LTO + strip，体积优先）
 cargo build --release

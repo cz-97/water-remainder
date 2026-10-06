@@ -49,6 +49,7 @@
 - **Windows 系统集成：** Windows 目标依赖 `windows` crate，处理 Win32、DWM、注册表、互斥体和文件选择对话框；`raw-window-handle` 用于从 GPUI 窗口取得原生句柄。
 - **时间：** `chrono` 提供本地日期、时间戳和日界限转换。
 - **记录存储：** `rusqlite` 使用 bundled SQLite；`r2d2` 与 `r2d2_sqlite` 提供连接池。
+- **配置序列化：** `serde` 派生配置类型的序列化/反序列化，`toml` 读写 `%APPDATA%` 下的 TOML 设置文件；语法无效时启动提示错误，缺失或类型错误字段使用默认值。
 - **事件通道：** `std::sync::mpsc` 用于调度线程，`futures-channel` / `futures-util` 用于转发到 GPUI 事件循环。
 - **资源嵌入：** `build.rs` 使用 `embed-resource` 编译根目录的 `water-remainder.rc`；资源图位于 `src/assets/`。
 
@@ -80,7 +81,7 @@
 
 ## 用户数据位置
 
-- `%APPDATA%\\water-remainder\\settings.txt`：设置和主窗口状态。
+- `%APPDATA%\\water-remainder\\settings.toml`：设置和主窗口状态。
 - `%APPDATA%\\water-remainder\\data.db`：喝水记录 SQLite 数据库（运行时也可能有 WAL/SHM 文件）。
 - `%APPDATA%\\water-remainder\\reminder.img`：自定义提醒图片；不存在时使用内置图片。
 - Windows 自启动：`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` 下的应用项。

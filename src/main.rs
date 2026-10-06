@@ -4,7 +4,7 @@ mod core;
 mod platform;
 mod ui;
 
-use core::config::{load_store, settings_snapshot};
+use core::config::{Store, load_store, settings_snapshot};
 use core::scheduler::{RescheduleType, SchedulerCmd, SchedulerEvent, start_scheduler};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use futures_util::StreamExt;
@@ -37,7 +37,16 @@ fn main() {
             // gpui-kit 的契约：开窗前初始化已启用的层。本项目 `default-features = false`，
             // 只启用 gpui 层，所以这里只登记了 gpui-base 的主题与控件全局态，界面自绘不读它。
             gpui_kit::init(cx);
-            let store = Arc::new(Mutex::new(load_store()));
+            let (loaded_store, config_loaded) = match load_store() {
+                Ok(store) => (store, true),
+                Err(error) => {
+                    platform::warn(&format!(
+                        "{error}\n\n本次将使用默认设置；修复设置文件后重新启动即可恢复。"
+                    ));
+                    (Store::default(), false)
+                }
+            };
+            let store = Arc::new(Mutex::new(loaded_store));
             let settings = settings_snapshot(&store);
             // 把用户选的主题写进全局配色，早于任何窗口创建 —— 否则首帧会用默认的
             // 「跟随系统」渲染出一瞬，再被用户设置纠正（肉眼可见的闪一下）。
@@ -45,7 +54,7 @@ fn main() {
             platform::enable_system_menu_theme();
             // 启动时把注册表对齐到设置里的 `autostart`。失败只意味着这次没对上，
             // 不影响程序使用，因此提示但不中断：用户至少能从弹出框知道原因。
-            if let Err(error) = platform::set_autostart(settings.autostart) {
+            if config_loaded && let Err(error) = platform::set_autostart(settings.autostart) {
                 platform::warn(&format!("{error}\n\n开机启动设置未能生效。"));
             }
             // 托盘建不起来就没有常驻入口、也没有退出方式，因此这是致命错误：提示用户

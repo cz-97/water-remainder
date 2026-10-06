@@ -1,6 +1,6 @@
 [package]
 name = "water-remainder"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 authors = ["cz-97"]
 
@@ -26,6 +26,8 @@ futures-util = "0.3"
 rusqlite = { version = "0.40", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [profile.release]
 opt-level = "z"

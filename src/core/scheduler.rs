@@ -34,14 +34,14 @@ pub enum RescheduleType {
 }
 
 /// 启动调度线程。间隔由调用方传入（启动时已从设置里读过），
-/// 线程内因此不再自己读一遍 `settings.txt`，两次读之间也不存在不一致窗口。
+/// 线程内因此不再自己读一遍设置文件，两次读之间也不存在不一致窗口。
 pub fn start_scheduler(
     interval_secs: u64,
 ) -> (mpsc::Sender<SchedulerCmd>, mpsc::Receiver<SchedulerEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     thread::spawn(move || {
-        // 再兜一次底：`settings.txt` 可以手改，间隔为 0 会让下面的
+        // 再兜一次底：设置文件可以手改，间隔为 0 会让下面的
         // `recv_timeout(0)` 立刻超时、deadline 又永远已过，退化成紧循环。
         let mut interval = Duration::from_secs(interval_secs.max(MIN_INTERVAL));
         let mut deadline = get_deadline(interval);

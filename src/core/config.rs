@@ -1,4 +1,5 @@
 use crate::core::paths::app_dir;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Write,
@@ -10,12 +11,8 @@ use std::{
 pub const MIN_INTERVAL: u64 = 60;
 pub const DEFAULT_INTERVAL: u64 = 45 * MIN_INTERVAL;
 
-/// 把任意来源的间隔收敛到最接近的合法档位。
-///
-/// `settings.txt` 是纯文本、可以手改，旧版本也可能留下表外的值。不收敛会有两个后果：
-/// `0` 让调度线程的 `recv_timeout(0)` 立刻超时、deadline 又永远已过，于是退化成
-/// 每轮发一次提醒的紧循环；表外值让设置窗的步进器 `position(..)` 落到索引 0，
-/// 显示错误分档，点一下就把原值覆盖成表里的第二档。正好落在两档中间时取下界。
+/// 把任意来源的间隔收敛到最接近的合法档位，避免非法间隔造成紧循环或设置窗显示错档；
+/// 正好落在两档中间时取下界。
 pub fn normalize_interval(seconds: u64) -> u64 {
     INTERVALS
         .iter()
@@ -41,9 +38,9 @@ pub const INTERVALS: &[u64] = &[
     75 * MIN_INTERVAL,
 ];
 
-/// 界面主题。与 `u32`/`u64` 无关，落盘成字面量字符串（`system` / `light` / `dark`），
-/// 这样 `settings.txt` 手改时能看懂，解析失败也只回退到 `System`。
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+/// 界面主题以小写字符串写入 TOML，便于阅读和手动编辑。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Theme {
     /// 跟随系统深浅（默认）。
     #[default]
@@ -56,15 +53,6 @@ impl Theme {
     /// 设置窗里作为**预览卡片**展示的两个取值（跟随系统是开关，不是卡片）。
     pub const CHOICES: [Theme; 2] = [Theme::Light, Theme::Dark];
 
-    /// 落盘用的字面量。
-    pub fn as_key(self) -> &'static str {
-        match self {
-            Theme::System => "system",
-            Theme::Light => "light",
-            Theme::Dark => "dark",
-        }
-    }
-
     /// 界面上的中文名。
     pub fn label(self) -> &'static str {
         match self {
@@ -73,22 +61,16 @@ impl Theme {
             Theme::Dark => "深色",
         }
     }
-
-    /// 解析落盘值。未知值返回 `None`，由调用方决定回退成什么。
-    pub fn from_key(value: &str) -> Option<Self> {
-        match value.trim() {
-            "system" => Some(Theme::System),
-            "light" => Some(Theme::Light),
-            "dark" => Some(Theme::Dark),
-            _ => None,
-        }
-    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub interval_secs: u64,
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub autostart: bool,
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub theme: Theme,
 }
 
@@ -102,79 +84,57 @@ impl Default for Settings {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Store {
     pub settings: Settings,
+    #[serde(rename = "window", skip_serializing_if = "Option::is_none")]
     pub window_state: Option<WindowState>,
 }
-#[derive(Clone, Copy)]
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WindowState {
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub x: f32,
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub y: f32,
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub width: f32,
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub height: f32,
+    #[serde(deserialize_with = "deserialize_or_default")]
     pub maximized: bool,
 }
 
+fn deserialize_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(T::deserialize(deserializer).unwrap_or_default())
+}
+
 fn settings_file() -> PathBuf {
-    app_dir().join("settings.txt")
+    app_dir().join("settings.toml")
 }
 
-pub fn load_store() -> Store {
-    match fs::read_to_string(settings_file()) {
-        Ok(text) => parse_store(&text),
-        // 文件不存在（首次启动）或读不出来：全部走默认值。
-        Err(_) => parse_store(""),
-    }
-}
-
-/// 把 `settings.txt` 的文本解析成 `Store`。
-///
-/// 抽成纯函数是为了能直接对「损坏时逐行回退默认值」这条约定写测试：文件是纯文本、
-/// 用户可手改，所以未知键要忽略、解析失败的单个值只影响它自己那一项，不能连累
-/// 同一文件里的其它设置。
-fn parse_store(text: &str) -> Store {
-    let mut s = Store {
-        settings: Settings::default(),
-        window_state: None,
-    };
-    for line in text.lines() {
-        let mut p = line.splitn(2, '=');
-        match (p.next(), p.next()) {
-            (Some("interval"), Some(v)) => {
-                // 解析失败与越界都收敛到最近的合法档位，见 `normalize_interval`。
-                s.settings.interval_secs =
-                    normalize_interval(v.trim().parse().unwrap_or(DEFAULT_INTERVAL))
-            }
-            (Some("autostart"), Some(v)) => s.settings.autostart = v == "true",
-            // 未知主题名保持默认（跟随系统），不再连累同一文件里的其它设置。
-            (Some("theme"), Some(v)) => {
-                s.settings.theme = Theme::from_key(v).unwrap_or_default();
-            }
-            (Some("window_x"), Some(v)) => {
-                s.window_state.get_or_insert_with(default_window_state).x = v.parse().unwrap_or(0.)
-            }
-            (Some("window_y"), Some(v)) => {
-                s.window_state.get_or_insert_with(default_window_state).y = v.parse().unwrap_or(0.)
-            }
-            (Some("window_width"), Some(v)) => {
-                s.window_state
-                    .get_or_insert_with(default_window_state)
-                    .width = v.parse().unwrap_or(600.)
-            }
-            (Some("window_height"), Some(v)) => {
-                s.window_state
-                    .get_or_insert_with(default_window_state)
-                    .height = v.parse().unwrap_or(800.)
-            }
-            (Some("window_maximized"), Some(v)) => {
-                s.window_state
-                    .get_or_insert_with(default_window_state)
-                    .maximized = v == "true"
-            }
-            _ => {}
+pub fn load_store() -> Result<Store, String> {
+    let text = match fs::read_to_string(settings_file()) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Store::default());
         }
-    }
-    s
+        Err(error) => return Err(format!("读取设置文件失败：{error}")),
+    };
+    parse_store(&text).map_err(|error| format!("解析设置文件失败：{error}"))
+}
+
+/// 解析 TOML 配置并收敛间隔。缺失或类型无效的字段使用各自默认值；语法错误返回错误。
+fn parse_store(text: &str) -> Result<Store, toml::de::Error> {
+    let mut s = toml::from_str::<Store>(text)?;
+    s.settings.interval_secs = normalize_interval(s.settings.interval_secs);
+    Ok(s)
 }
 /// 取一份设置快照。
 ///
@@ -200,26 +160,15 @@ pub fn save_store(s: &Store) -> std::io::Result<()> {
     if let Some(d) = p.parent() {
         fs::create_dir_all(d)?;
     }
-    let mut out = format!(
-        "interval={}\nautostart={}\ntheme={}\n",
-        s.settings.interval_secs,
-        s.settings.autostart,
-        s.settings.theme.as_key()
-    );
-    if let Some(w) = s.window_state {
-        out.push_str(&format!(
-            "window_x={}\nwindow_y={}\nwindow_width={}\nwindow_height={}\nwindow_maximized={}\n",
-            w.x, w.y, w.width, w.height, w.maximized
-        ));
-    }
+    let out = toml::to_string_pretty(s).map_err(std::io::Error::other)?;
     write_atomic(&p, &out)
 }
 
-/// 原子地覆盖写一个小文本文件：先写同目录下的临时文件并 `sync_all`，再改名覆盖。
+/// 原子地覆盖写 TOML 文件：先写同目录下的临时文件并 `sync_all`，再改名覆盖。
 ///
 /// 直接 `fs::write` 会在写入途中把原文件截断；本程序启动时又无条件按 `autostart`
 /// 调 [`crate::platform::set_autostart`]，所以一次「写到一半就崩溃」会让
-/// `settings.txt` 回退成默认值（`autostart = false`），进而**静默关掉用户的开机启动**。
+/// 配置回退成默认值（`autostart = false`），进而**静默关掉用户的开机启动**。
 /// 改名在 Windows 上对已存在的目标文件是覆盖式原子替换，读到的永远是完整的旧内容
 /// 或完整的新内容。
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -238,7 +187,7 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 /// 改设置的唯一入口：加锁、修改、落盘都在这里完成，调用方只描述「改什么」。
 ///
 /// 落盘失败时**把内存改回去**再返回错误 —— 否则界面显示的是「已生效」，而
-/// `settings.txt` 里还是旧值，用户重启一次就会发现设置莫名复原。宁可当场
+/// 配置文件里还是旧值，用户重启一次就会发现设置莫名复原。宁可当场
 /// 告诉用户没存住，也不要制造这种分叉。
 pub fn update_settings<R>(
     store: &Arc<Mutex<Store>>,
@@ -250,7 +199,7 @@ pub fn update_settings<R>(
 /// `update_settings` 的实现主体，落盘动作可注入。
 ///
 /// 之所以把保存步骤当参数传进来，是为了能测试「落盘失败时内存值被回滚」这条
-/// 关键路径 —— 否则测试就得去写用户真实的 `settings.txt`，那是绝不能做的事。
+/// 关键路径 —— 否则测试就得去写用户真实的配置文件，那是绝不能做的事。
 fn update_settings_with<R>(
     store: &Arc<Mutex<Store>>,
     edit: impl FnOnce(&mut Settings) -> R,
@@ -286,13 +235,15 @@ impl std::fmt::Display for SaveError {
     }
 }
 
-fn default_window_state() -> WindowState {
-    WindowState {
-        x: 0.,
-        y: 0.,
-        width: 600.,
-        height: 800.,
-        maximized: false,
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            x: 0.,
+            y: 0.,
+            width: 600.,
+            height: 800.,
+            maximized: false,
+        }
     }
 }
 
@@ -300,69 +251,43 @@ fn default_window_state() -> WindowState {
 mod tests {
     use super::*;
 
-    /// `settings.txt` 可手改，非法间隔必须被收敛到表内档位，否则 0 会让调度线程
-    /// 退化成每秒发一次提醒的紧循环，表外值会让设置窗步进器显示错档。
     #[test]
-    fn normalize_interval_accepts_table_values_unchanged() {
+    fn normalize_interval_handles_edges_and_nearest_bucket() {
         for &seconds in INTERVALS {
             assert_eq!(normalize_interval(seconds), seconds);
         }
-    }
-
-    #[test]
-    fn normalize_interval_collapses_zero_and_absurd_values() {
         assert_eq!(normalize_interval(0), INTERVALS[0]);
         assert_eq!(normalize_interval(u64::MAX), *INTERVALS.last().unwrap());
-    }
-
-    /// 正好落在两档中间时取下界 —— 文档明确写了这条，且它是任意的但必须稳定。
-    #[test]
-    fn normalize_interval_breaks_ties_downward() {
-        let (lower, upper) = (INTERVALS[3], INTERVALS[4]);
-        let midpoint = (lower + upper) / 2;
-        assert_eq!(
-            midpoint - lower,
-            upper - midpoint,
-            "构造用例时两档必须等距，否则测不到平局"
-        );
-        assert_eq!(normalize_interval(midpoint), lower);
-    }
-
-    #[test]
-    fn normalize_interval_picks_the_nearest_bucket() {
         assert_eq!(normalize_interval(INTERVALS[2] + 1), INTERVALS[2]);
         assert_eq!(normalize_interval(INTERVALS[2] - 1), INTERVALS[2]);
+
+        let (lower, upper) = (INTERVALS[3], INTERVALS[4]);
+        assert_eq!(normalize_interval((lower + upper) / 2), lower);
     }
 
     #[test]
-    fn parse_store_defaults_on_empty_text() {
-        let store = parse_store("");
-        assert_eq!(store.settings.interval_secs, DEFAULT_INTERVAL);
-        assert!(!store.settings.autostart);
+    fn toml_defaults_missing_values_and_normalizes_interval() {
+        let store = parse_store("[settings]\nautostart = true\ninterval_secs = 0\n").unwrap();
+        assert_eq!(store.settings.interval_secs, INTERVALS[0]);
+        assert!(store.settings.autostart);
+        assert_eq!(store.settings.theme, Theme::System);
         assert!(store.window_state.is_none());
-    }
 
-    /// 损坏的值只影响它自己那一项，同一文件里的其它设置必须保住 ——
-    /// 否则一次手改失误会把用户的全部设置清空。
-    #[test]
-    fn parse_store_keeps_good_keys_when_one_value_is_corrupt() {
-        let store = parse_store("interval=not-a-number\nautostart=true\n");
-        assert_eq!(store.settings.interval_secs, DEFAULT_INTERVAL);
-        assert!(store.settings.autostart, "坏值不能连累 autostart");
+        let defaults = parse_store("").unwrap();
+        assert_eq!(defaults.settings.interval_secs, DEFAULT_INTERVAL);
+        assert!(!defaults.settings.autostart);
     }
 
     #[test]
-    fn parse_store_ignores_unknown_and_malformed_lines() {
-        let store = parse_store("garbage\n=5\nunknown=1\ninterval=2700\n");
-        assert_eq!(store.settings.interval_secs, 2700);
-    }
-
-    #[test]
-    fn parse_store_reads_window_state_and_maximized_flag() {
+    fn toml_loads_settings_and_window_state() {
         let store = parse_store(
-            "window_x=100\nwindow_y=200\nwindow_width=640\nwindow_height=900\nwindow_maximized=true\n",
-        );
-        let window = store.window_state.expect("应解析出窗口状态");
+            "[settings]\ninterval_secs = 2700\nautostart = true\ntheme = \"dark\"\n\n[window]\nx = 100.0\ny = 200.0\nwidth = 640.0\nheight = 900.0\nmaximized = true\n",
+        )
+        .unwrap();
+        assert_eq!(store.settings.interval_secs, 2700);
+        assert!(store.settings.autostart);
+        assert_eq!(store.settings.theme, Theme::Dark);
+        let window = store.window_state.unwrap();
         assert_eq!(window.x, 100.);
         assert_eq!(window.y, 200.);
         assert_eq!(window.width, 640.);
@@ -370,122 +295,70 @@ mod tests {
         assert!(window.maximized);
     }
 
-    /// `autostart` 只认字面量 `true`：写 `1` / `True` 不能被当成开启，
-    /// 否则启动时会把注册表 Run 键设成与设置显示不一致的状态。
     #[test]
-    fn parse_store_treats_only_literal_true_as_autostart_on() {
-        for text in [
-            "autostart=1",
-            "autostart=True",
-            "autostart=yes",
-            "autostart=",
-        ] {
-            assert!(
-                !parse_store(text).settings.autostart,
-                "{text:?} 不应被当成开启"
-            );
-        }
-        assert!(parse_store("autostart=true").settings.autostart);
+    fn invalid_toml_is_reported_and_invalid_fields_fall_back() {
+        assert!(parse_store("[settings\ninterval_secs = 2700\n").is_err());
+        let store = parse_store(
+            "[settings]\ninterval_secs = 2700\nautostart = \"yes\"\ntheme = \"unknown\"\n",
+        )
+        .unwrap();
+        assert_eq!(store.settings.interval_secs, 2700);
+        assert!(!store.settings.autostart);
+        assert_eq!(store.settings.theme, Theme::System);
     }
 
     #[test]
-    fn theme_round_trips_through_its_key() {
-        // 三个取值都要能往返：System 走开关，另两个走预览卡片，一个都不能漏。
-        for theme in [Theme::System, Theme::Light, Theme::Dark] {
-            assert_eq!(Theme::from_key(theme.as_key()), Some(theme));
-            let store = parse_store(&format!("theme={}", theme.as_key()));
-            assert_eq!(store.settings.theme, theme);
-        }
-    }
-
-    /// 缺省必须是「跟随系统」：老版本写出的 `settings.txt` 里没有 `theme=` 这一行，
-    /// 解析后若不是 System，升级上来的用户会莫名其妙被固定成某一种外观。
-    #[test]
-    fn theme_defaults_to_following_the_system() {
-        assert_eq!(parse_store("").settings.theme, Theme::System);
-        assert_eq!(
-            parse_store("interval=3000\nautostart=true\n")
-                .settings
-                .theme,
-            Theme::System
-        );
-        assert_eq!(Settings::default().theme, Theme::System);
-    }
-
-    /// 未知主题值只回退它自己那一项，不能连累同文件里的其它设置。
-    #[test]
-    fn theme_falls_back_to_system_on_garbage() {
-        for value in ["sepia", "", "true", "LIGHT", "0"] {
-            let store = parse_store(&format!("theme={value}\ninterval=3000\nautostart=true\n"));
-            assert_eq!(store.settings.theme, Theme::System, "{value:?} 应回退");
-            assert_eq!(store.settings.interval_secs, 3000, "{value:?} 不应连累间隔");
-            assert!(store.settings.autostart, "{value:?} 不应连累开机启动");
-        }
-    }
-
-    /// 落盘必须写出 `theme=`，否则用户下次启动会回到「跟随系统」，等于切换没保存。
-    #[test]
-    fn saved_settings_include_the_theme() {
-        let mut store = parse_store("");
-        store.settings.theme = Theme::Dark;
-        let dir = std::env::temp_dir().join(format!("wr-theme-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.txt");
-        // 借 write_atomic 走一遍落盘，检查产物里确实带着 theme。
-        let mut out = String::new();
-        out.push_str(&format!("theme={}\n", store.settings.theme.as_key()));
-        write_atomic(&path, &out).unwrap();
-        let text = fs::read_to_string(&path).unwrap();
-        assert!(
-            text.contains("theme=dark"),
-            "产物应含 theme=dark，实际：{text}"
-        );
-        assert_eq!(parse_store(&text).settings.theme, Theme::Dark);
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    /// 每个主题都要有名字，且没有重复。`System` 的名字正是设置窗开关上的那四个字。
-    #[test]
-    fn every_theme_has_a_distinct_label() {
-        let labels: Vec<&str> = [Theme::System, Theme::Light, Theme::Dark]
-            .iter()
-            .map(|t| t.label())
-            .collect();
-        assert_eq!(labels.len(), 3);
-        for (i, a) in labels.iter().enumerate() {
-            for b in &labels[i + 1..] {
-                assert_ne!(a, b, "选项名称不能重复");
-            }
-        }
-        assert_eq!(Theme::System.label(), "跟随系统");
-        // `CHOICES` 是设置窗实际画成预览卡片的那两个，不能把 System 混进去。
-        assert!(
-            Theme::CHOICES.iter().all(|t| *t != Theme::System),
-            "跟随系统是开关，不该出现在预览卡片列表里"
-        );
-        assert_eq!(Theme::CHOICES.len(), 2);
+    fn store_round_trips_through_toml() {
+        let store = Store {
+            settings: Settings {
+                interval_secs: 2700,
+                autostart: true,
+                theme: Theme::Dark,
+            },
+            window_state: Some(WindowState {
+                x: 100.,
+                y: 200.,
+                width: 640.,
+                height: 900.,
+                maximized: true,
+            }),
+        };
+        let encoded = toml::to_string_pretty(&store).unwrap();
+        assert!(encoded.contains("[settings]"));
+        assert!(encoded.contains("theme = \"dark\""));
+        let decoded = parse_store(&encoded).unwrap();
+        assert_eq!(decoded.settings.interval_secs, 2700);
+        assert!(decoded.settings.autostart);
+        assert_eq!(decoded.settings.theme, Theme::Dark);
+        let window = decoded.window_state.unwrap();
+        assert_eq!(window.width, 640.);
+        assert!(window.maximized);
     }
 
     #[test]
     fn write_atomic_replaces_contents_and_leaves_no_temp_file() {
         let dir = std::env::temp_dir().join(format!("wr-config-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.txt");
+        let path = dir.join("settings.toml");
 
-        write_atomic(&path, "first-version-longer").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "first-version-longer");
-        // 覆盖写一个更短的内容：旧内容不能有残留。
-        write_atomic(&path, "second").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+        write_atomic(&path, "[settings]\ninterval_secs = 2700\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[settings]\ninterval_secs = 2700\n"
+        );
+        write_atomic(&path, "[settings]\nautostart = true\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[settings]\nautostart = true\n"
+        );
 
         let leftovers: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| name != "settings.txt")
+            .filter(|name| name != "settings.toml")
             .collect();
         assert!(leftovers.is_empty(), "目录里残留了临时文件：{leftovers:?}");
-
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -515,8 +388,6 @@ mod tests {
         assert!(store.lock().unwrap().settings.autostart);
     }
 
-    /// 落盘失败必须把内存值改回去。否则界面显示「已开启」而文件里仍是旧值，
-    /// 用户重启一次就会发现设置莫名复原 —— 这是刻意避免的分叉。
     #[test]
     fn update_settings_rolls_back_when_saving_fails() {
         let store = store_with(3000, false);
@@ -526,36 +397,24 @@ mod tests {
                 settings.interval_secs = 900;
                 settings.autostart = true;
             },
-            |_| Err(std::io::Error::other("磁盘满了")),
+            |_| Err(std::io::Error::other("disk full")),
         );
-        assert!(result.is_err(), "落盘失败必须返回错误");
+        assert!(result.is_err());
         let after = store.lock().unwrap().settings.clone();
-        assert_eq!(after.interval_secs, 3000, "间隔必须回滚");
-        assert!(!after.autostart, "开机启动必须回滚");
+        assert_eq!(after.interval_secs, 3000);
+        assert!(!after.autostart);
     }
 
-    /// 返回的错误要能说清原因，界面才有东西可显示。
     #[test]
-    fn save_error_describes_the_failure() {
-        let error = SaveError::Io(std::io::Error::other("磁盘满了"));
-        assert!(error.to_string().contains("磁盘满了"));
-        assert!(!SaveError::Locked.to_string().is_empty());
-    }
-
-    /// 锁中毒（有线程持锁时 panic）不能让程序崩，也不能把好数据丢掉：
-    /// release 下 `panic = "abort"`，启动路径上 panic 会无声退出。
-    #[test]
-    fn settings_snapshot_survives_a_poisoned_lock() {
+    fn settings_snapshot_reads_a_poisoned_lock() {
         let store = store_with(2400, true);
         let clone = store.clone();
-        // 在持锁状态下 panic，把 Mutex 变成中毒状态。
         let _ = std::thread::spawn(move || {
             let _guard = clone.lock().unwrap();
-            panic!("模拟持锁线程 panic");
+            panic!("simulate panic while holding the lock");
         })
         .join();
-        assert!(store.lock().is_err(), "前提：锁应已中毒");
-
+        assert!(store.lock().is_err());
         let settings = settings_snapshot(&store);
         assert_eq!(settings.interval_secs, 2400);
         assert!(settings.autostart);

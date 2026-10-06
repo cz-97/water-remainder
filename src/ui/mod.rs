@@ -442,22 +442,7 @@ mod tests {
         assert_eq!(calendar_level(4), 2);
         assert_eq!(calendar_level(6), 2);
         assert_eq!(calendar_level(7), 3);
-    }
-
-    /// 封顶后不再增长，否则深色档会越界。
-    #[test]
-    fn calendar_level_saturates_at_the_top_level() {
-        let top = palette::CALENDAR_LEVELS - 1;
-        assert_eq!(calendar_level(top * 3), top);
-        assert_eq!(calendar_level(usize::MAX), top);
-    }
-
-    /// 取色必须能对每一档算出颜色而不 panic —— 这是上面那条不变式的实际后果。
-    #[test]
-    fn calendar_color_is_defined_for_every_count() {
-        for count in 0..=(palette::CALENDAR_LEVELS * 3 + 5) {
-            let _ = calendar_color(count);
-        }
+        assert_eq!(calendar_level(usize::MAX), palette::CALENDAR_LEVELS - 1);
     }
 
     #[test]

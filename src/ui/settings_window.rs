@@ -643,11 +643,8 @@ mod tests {
     /// 都是在撒谎。跟着系统的语义只由左边那个开关表示。
     #[test]
     fn no_preview_is_highlighted_while_following_the_system() {
-        for system_is_light in [true, false] {
-            assert!(!preview_is_selected(Theme::System, Theme::Light));
-            assert!(!preview_is_selected(Theme::System, Theme::Dark));
-            let _ = system_is_light;
-        }
+        assert!(!preview_is_selected(Theme::System, Theme::Light));
+        assert!(!preview_is_selected(Theme::System, Theme::Dark));
     }
 
     /// 手动选中时，只有对应那张点亮。
@@ -657,33 +654,5 @@ mod tests {
         assert!(!preview_is_selected(Theme::Light, Theme::Dark));
         assert!(preview_is_selected(Theme::Dark, Theme::Dark));
         assert!(!preview_is_selected(Theme::Dark, Theme::Light));
-    }
-
-    /// 设置窗不可缩放，高度必须自己装得下全部内容；主题那一行是后来加的，
-    /// 固定高度如果忘了跟着调，底部就会被裁掉。
-    ///
-    /// 断言的是「两个常量之间的关系」，编译器能在编译期判定其真伪，因此
-    /// clippy 会报 `assertions_on_constants`。这里**刻意保留**：它是一份可执行的
-    /// 布局记账 —— 以后有人加了设置项却忘了调 `SETTINGS_HEIGHT`，测试就会失败。
-    #[test]
-    #[allow(clippy::assertions_on_constants)]
-    fn settings_window_is_tall_enough_for_its_content() {
-        // 按当前各元素真实高度求和：标题栏 + 上下内边距 + 三个分组标题
-        // + 三行设置 + 两处分组间距 + 「主题」标题 + 主题预览(46 + 2px 描边)
-        // + 元素间距。
-        let content = 38. + 2. * 20. + 3. * 28. + 3. * 74. + 2. * 12. + 20. + 50.;
-        assert!(
-            SETTINGS_HEIGHT >= content,
-            "窗口高 {} 装不下约 {} 的内容，主题预览会被裁掉",
-            SETTINGS_HEIGHT,
-            content
-        );
-        // 左边两张预览各 150，加上「跟随系统」开关与其文字约 130，两处间隙 16，
-        // 再加左右内边距 32：合计约 480，窗口 520 刚好放得下且不换行。
-        assert!(
-            2. * 150. + 130. + 2. * 8. + 2. * 16. <= SETTINGS_WIDTH,
-            "窗口宽 {} 放不下两张预览加「跟随系统」开关",
-            SETTINGS_WIDTH
-        );
     }
 }

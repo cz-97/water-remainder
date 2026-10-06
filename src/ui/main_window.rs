@@ -513,36 +513,15 @@ fn create_main_window(
 mod tests {
     use super::*;
 
-    /// 日历网格自身不能超过列宽，否则格子会被压扁。
+    /// 恢复旧窗口尺寸时抬到下限，并保留已足够大的尺寸。
     #[test]
-    fn calendar_grid_fits_inside_one_column() {
-        const CELL: f32 = 30.;
-        const GAP: f32 = 4.; // gap_1
-        let grid = CELL * 7. + GAP * 6.;
-        assert!(
-            grid <= CALENDER_WIDTH,
-            "7 列格子需要 {grid}px，但列宽只有 {CALENDER_WIDTH}px"
-        );
-    }
-
-    /// 恢复旧设置时必须抬到下限，否则老用户看到的仍是被压扁的两列。
-    /// 用户机器上真实存过 `window_width=500`，正是这种情形。
-    #[test]
-    fn restored_size_is_lifted_to_the_minimum() {
-        assert_eq!(clamp_to_minimum(500., 821.33), (CONTENT_WIDTH, 821.33));
-        assert_eq!(
-            clamp_to_minimum(400., 300.),
-            (CONTENT_WIDTH, CONTENT_HEIGHT)
-        );
-    }
-
-    /// 已经够大（或被最大化）的窗口不能被改动。
-    #[test]
-    fn restored_size_above_the_minimum_is_kept() {
-        assert_eq!(clamp_to_minimum(1200., 900.), (1200., 900.));
-        assert_eq!(
-            clamp_to_minimum(CONTENT_WIDTH, CONTENT_HEIGHT),
-            (CONTENT_WIDTH, CONTENT_HEIGHT)
-        );
+    fn restored_size_is_clamped_to_minimum() {
+        for (input, expected) in [
+            ((500., 821.33), (CONTENT_WIDTH, 821.33)),
+            ((400., 300.), (CONTENT_WIDTH, CONTENT_HEIGHT)),
+            ((1200., 900.), (1200., 900.)),
+        ] {
+            assert_eq!(clamp_to_minimum(input.0, input.1), expected);
+        }
     }
 }

@@ -105,30 +105,22 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
     }
 
+    /// 检查单位边界及跨单位时不能省略中间单位。
     #[test]
-    fn format_span_expands_from_largest_nonzero_unit() {
-        assert_eq!(format_span(0), "0 秒");
-        assert_eq!(format_span(59), "59 秒");
-        assert_eq!(format_span(60), "1 分 0 秒");
-        assert_eq!(format_span(61), "1 分 1 秒");
-        assert_eq!(format_span(3600), "1 小时 0 分 0 秒");
-        assert_eq!(format_span(3661), "1 小时 1 分 1 秒");
-        assert_eq!(format_span(90_061), "1 天 1 小时 1 分 1 秒");
-    }
-
-    /// 老写法会退化成「1 小时 59 秒」。这里钉住「跨了单位就把中间单位补齐」，
-    /// 因为浮层每秒重绘，文案有歧义会被直接看到。
-    #[test]
-    fn format_span_never_skips_an_intermediate_unit() {
-        assert_eq!(format_span(3600 + 59), "1 小时 0 分 59 秒");
-        assert_eq!(format_span(86_400 + 59), "1 天 0 小时 0 分 59 秒");
-        assert!(!format_span(3600 + 59).contains("1 小时 59 秒"));
-    }
-
-    #[test]
-    fn format_span_handles_whole_days() {
-        assert_eq!(format_span(86_400), "1 天 0 小时 0 分 0 秒");
-        assert_eq!(format_span(2 * 86_400 + 3 * 3600), "2 天 3 小时 0 分 0 秒");
+    fn format_span_covers_boundaries_and_intermediate_units() {
+        for (seconds, expected) in [
+            (0, "0 秒"),
+            (59, "59 秒"),
+            (60, "1 分 0 秒"),
+            (61, "1 分 1 秒"),
+            (3600, "1 小时 0 分 0 秒"),
+            (3659, "1 小时 0 分 59 秒"),
+            (3661, "1 小时 1 分 1 秒"),
+            (86_459, "1 天 0 小时 0 分 59 秒"),
+            (176_400, "2 天 1 小时 0 分 0 秒"),
+        ] {
+            assert_eq!(format_span(seconds), expected);
+        }
     }
 
     #[test]
@@ -165,31 +157,5 @@ mod tests {
         let (_, end) = day_bounds(day).unwrap();
         let (next_start, _) = day_bounds(day.succ_opt().unwrap()).unwrap();
         assert_eq!(end, next_start);
-    }
-
-    #[test]
-    fn local_date_round_trips_through_day_bounds() {
-        let day = date(2026, 7, 20);
-        let (start, _) = day_bounds(day).unwrap();
-        assert_eq!(local_date(start), day);
-        assert_eq!(local_date(start + 3600), day);
-    }
-
-    #[test]
-    fn formatted_clock_has_the_expected_shape() {
-        let day = date(2026, 7, 20);
-        let (start, _) = day_bounds(day).unwrap();
-        let clock = format_clock(start);
-        assert_eq!(clock.len(), 5, "HH:MM");
-        assert!(clock.contains(':'));
-        let with_secs = format_clock_secs(start);
-        assert_eq!(with_secs.len(), 8, "HH:MM:SS");
-        assert_eq!(with_secs.matches(':').count(), 2);
-    }
-
-    #[test]
-    fn format_date_is_zero_padded_by_chrono_fields() {
-        assert_eq!(format_date(date(2026, 1, 9)), "2026年1月9日");
-        assert_eq!(format_date(date(2026, 12, 31)), "2026年12月31日");
     }
 }

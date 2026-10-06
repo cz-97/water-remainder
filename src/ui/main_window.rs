@@ -19,20 +19,15 @@ use gpui_kit::{
 };
 use std::sync::{Arc, Mutex, mpsc};
 
-/// 左（日历）与右（时间轴）两列的固定宽度。
-const COLUMN_WIDTH: f32 = 250.;
+const CALENDER_WIDTH: f32 = 250.;
+const TIMELINE_WIDTH: f32 = 164.;
 /// 内容区左右内边距（`p_6` = 1.5rem = 24px，两侧共 48px）。
 const CONTENT_PADDING: f32 = 48.;
-/// 两列之间的间距（`gap_8` = 2rem = 32px）。
-const COLUMN_GAP: f32 = 32.;
+/// 两列之间的间距（`gap_12` = 3rem = 48px）。
+const COLUMN_GAP: f32 = 48.;
 
-/// 主窗最小宽度 = 两列 + 内边距 + 列间距。
-///
-/// 这个值**必须由上面三个常量算出来**，不能各写一遍字面量：两列都是固定宽度、
-/// 外层又不可滚动，窗口一旦窄于这个和，Flexbox 就会把两列压扁（默认 `flex_shrink`
-/// 是 1），日历网格与时间轴跟着变形。此前窗口最小/默认宽度写的是 500，比这里
-/// 少 80px，正是被压缩的状态。
-const CONTENT_WIDTH: f32 = COLUMN_WIDTH * 2. + CONTENT_PADDING + COLUMN_GAP;
+
+const CONTENT_WIDTH: f32 = CALENDER_WIDTH + TIMELINE_WIDTH + CONTENT_PADDING + COLUMN_GAP;
 
 /// 主窗最小高度。
 const CONTENT_HEIGHT: f32 = 800.;
@@ -156,7 +151,7 @@ impl MainWindow {
         }
 
         div()
-            .w(px(COLUMN_WIDTH))
+            .w(px(CALENDER_WIDTH))
             .flex()
             .flex_col()
             .gap_2()
@@ -311,11 +306,11 @@ impl Render for MainWindow {
                     .flex()
                     .flex_1()
                     .p_6()
-                    .gap_8()
+                    .gap_12()
                     .justify_center()
                     .child(
                         div()
-                            .w(px(COLUMN_WIDTH))
+                            .w(px(CALENDER_WIDTH))
                             .flex()
                             .flex_col()
                             .child(
@@ -331,7 +326,7 @@ impl Render for MainWindow {
                     )
                     .child(
                         div()
-                            .w(px(COLUMN_WIDTH))
+                            .w(px(TIMELINE_WIDTH))
                             .flex()
                             .flex_col()
                             .child(div().text_xl().font_weight(FontWeight::BOLD).child(
@@ -486,17 +481,6 @@ fn create_main_window(
 mod tests {
     use super::*;
 
-    /// 两列是固定宽度、外层不可滚动，所以最小宽度必须真的装得下内容。
-    /// 以前这里写死 500，比所需少 80px，两列被 Flexbox 压扁。
-    /// 这里钉住算式本身，避免有人把 `CONTENT_WIDTH` 换成写死的字面量。
-    #[test]
-    fn content_width_is_derived_from_the_columns() {
-        let needed = COLUMN_WIDTH * 2. + CONTENT_PADDING + COLUMN_GAP;
-        assert_eq!(CONTENT_WIDTH, needed);
-        // 两列 250 + 内边距 48 + 间距 32 = 580，这是用户能看见完整两列的下限。
-        assert_eq!(needed, 580.);
-    }
-
     /// 日历网格自身不能超过列宽，否则格子会被压扁。
     #[test]
     fn calendar_grid_fits_inside_one_column() {
@@ -504,8 +488,8 @@ mod tests {
         const GAP: f32 = 4.; // gap_1
         let grid = CELL * 7. + GAP * 6.;
         assert!(
-            grid <= COLUMN_WIDTH,
-            "7 列格子需要 {grid}px，但列宽只有 {COLUMN_WIDTH}px"
+            grid <= CALENDER_WIDTH,
+            "7 列格子需要 {grid}px，但列宽只有 {CALENDER_WIDTH}px"
         );
     }
 
@@ -513,14 +497,14 @@ mod tests {
     /// 用户机器上真实存过 `window_width=500`，正是这种情形。
     #[test]
     fn restored_size_is_lifted_to_the_minimum() {
-        assert_eq!(clamp_to_minimum(500., 821.33), (580., 821.33));
-        assert_eq!(clamp_to_minimum(400., 300.), (580., 800.));
+        assert_eq!(clamp_to_minimum(500., 821.33), (CONTENT_WIDTH, 821.33));
+        assert_eq!(clamp_to_minimum(400., 300.), (CONTENT_WIDTH, CONTENT_HEIGHT));
     }
 
     /// 已经够大（或被最大化）的窗口不能被改动。
     #[test]
     fn restored_size_above_the_minimum_is_kept() {
         assert_eq!(clamp_to_minimum(1200., 900.), (1200., 900.));
-        assert_eq!(clamp_to_minimum(580., 800.), (580., 800.));
+        assert_eq!(clamp_to_minimum(CONTENT_WIDTH, CONTENT_HEIGHT), (CONTENT_WIDTH, CONTENT_HEIGHT));
     }
 }

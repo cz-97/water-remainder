@@ -17,12 +17,45 @@
    - 这是常驻托盘的 GUI 程序（单实例、命名互斥体）：若旧进程仍在运行，新进程会因互斥体已存在而直接退出。结束命令：`taskkill /F /IM water-remainder.exe`。
    - 启动后**不要结束进程**，让它继续常驻托盘运行。
    - 若依赖未缓存，联网受限时改用 `cargo run --offline`。
+   - **必须按路径确认跑起来的是哪个 exe**，见下方「部署版与构建版共存」。`tasklist` / `ps` 只按镜像名匹配，对同名副本没有区分度，拿它当证据会误判。
 3. **提交** — `git commit`
    - 仅在第 1 步通过后执行；先暂存本次改动再提交。
    - **提交前先按下方规则决定是否更新 `Cargo.toml` 的 `version`**，需要时连同版本号一起暂存。
    - 提交信息遵循下方规范（与个人 `AGENTS.md` 一致）；**不需要展示提交细节**（文件清单、diff、commit hash 等）。
 
-一句话：**`cargo check --offline` 通过 → 先结束旧进程再 `cargo run`（启动后保留运行）→ 按需改版本号 → `git commit`。**
+一句话：**`cargo check --offline` 通过 → 先结束旧进程再 `cargo run`（启动后保留运行）→ 按路径核实跑的是新 exe → 按需改版本号 → `git commit`。**
+
+## 部署版与构建版共存（务必按路径核实）
+
+用户在 `D:\executable\water-remainder.exe` 放了一份自己部署的构建，会长期常驻托盘。
+单实例互斥体是 `Local\WaterRemainder.SingleInstance`，**不分路径** —— 部署版与
+`target\debug` 版互斥，后启动的那个会在 `ensure_single_instance()` 处**静默 return**，
+既不报错也不弹框。
+
+于是会出现一个很坏的局面：`cargo run` 照样打印 `Running target\debug\water-remainder.exe`，
+exe 时间戳也是新的，但**跑起来的不是它**，而上面那条命令已经「看起来成功」了。
+此时若用 `tasklist //FI "IMAGENAME eq water-remainder.exe"` 验证，拿到的会是部署版的 PID，
+从而把一次失败的启动当成成功（2026-10-06 连续误判两次，用户自己发现的）。
+
+**唯一可靠的验证方式**是查 `ExecutablePath`：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='water-remainder.exe'" |
+  Select-Object ProcessId, ExecutablePath, CreationDate
+```
+
+正确顺序：
+
+1. 启动**前**查一次。存在 `D:\executable\` 那份就按 PID 精确结束
+   （`taskkill /F /PID <pid>`），不要用 `/IM` —— `/IM` 会无差别杀掉所有副本。
+2. `cargo run`（常驻 GUI 用后台任务方式启动，**不要用 `cmd &` + `sleep`**：
+   子进程会随 shell 退出被带走，表现为「刚启动就没了」）。
+3. 等几秒后**再查一次**，`ExecutablePath` 必须是
+   `D:\code\water-remainder\target\debug\water-remainder.exe`，且 `CreationDate` 是刚才。
+   若仍是 `D:\executable\`，说明又被互斥体挡掉了，回到第 1 步。
+
+**通用原则**：验证指标必须具备区分度，且命令报错（exit code 非 0、SIGTERM、空输出）
+一律当作真实信号查证，不能因为「大概是沙箱的问题」就跳过。
 
 ## 版本号规则
 

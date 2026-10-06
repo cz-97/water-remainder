@@ -43,9 +43,6 @@ jobs:
           }
           Write-Host "版本核对通过：$tag"
 
-      - name: Build release
-        run: cargo build --release
-
       # 版本号从Cargo.toml 读，不从 tag 猜——tag 只用来命名 release。
       - name: Package artifact
         shell: pwsh

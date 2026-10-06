@@ -1,6 +1,9 @@
 # 编译 Rust 项目并复制可执行文件
 # 用法: 右键选择"使用 PowerShell 运行"，或在终端执行: .\build-copy.ps1
 #
+# 对应 AGENTS.md 里的「部署」：只做本地部署，不推 tag、不建发行版。
+# 「发布」= 本脚本 + 推 tag 触发 GitHub Release。
+#
 # 加 -NoPause 可在非交互场景（CI、被别的脚本调用）下运行，结束时不再等待按键。
 
 param([switch]$NoPause)

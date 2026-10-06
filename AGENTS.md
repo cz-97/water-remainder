@@ -88,13 +88,28 @@
 
 调试时不要把上述路径或某台机器的部署目录写进源码规则；路径应由代码中的路径模块和当前系统查询确认。
 
-## 发布
+## 部署与发布
 
-- **推 tag 即发布**：`git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`。
-  `.github/workflows/release.yml` 会在 windows-latest 上跑完检查与release 构建，
-  创建 GitHub Release 并附上 `water-remainder-<version>-windows-x64.exe` 与 `.sha256`。
-- **tag 必须与 `Cargo.toml` 的 `version` 一致**，否则 workflow 的第一步就会失败。
+用户的用词有固定含义，不要自行替换或合并：
+
+| 用户说 | 含义 | 动作 |
+| --- | --- | --- |
+| **「部署」** | 只做本地部署 | 执行 `build-copy.ps1`（release 构建 + 复制到本机部署目录），到此为止 |
+| **「发布」** | 部署 **加上传发行版** | 先执行 `build-copy.ps1`，再推 tag 触发 GitHub Release |
+
+- **「部署」不推 tag、不建发行版。** 只跑 `build-copy.ps1`。
+- **「发布」是两步，缺一不可**：本地部署 + 上传发行版。只推 tag 不部署，或只部署不推 tag，都算没做完。
+- 非交互环境执行 `build-copy.ps1` 时加 `-NoPause`，否则 `Read-Host` 会挂住。
+- 部署前若本程序正在运行，exe 被占用会导致复制失败；先按上文「运行验证」的方式结束同名进程。
+
+### 推 tag 即上传发行版
+
+`git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z` 会触发
+`.github/workflows/release.yml`：在 windows-latest 上跑完 fmt / clippy / test 与 release 构建，
+创建 GitHub Release 并附上 `water-remainder-<version>-windows-x64.exe` 与 `.sha256`。
+
+- **tag 必须与 `Cargo.toml` 的 `version` 一致**，否则 workflow 第一步就失败。
   这一步是有意的：否则 `git tag v9.9.9` 也能发出一个声称 9.9.9 的旧构建。
 - 发行版面向用户，**改动可见行为或系统行为时更新 `CHANGELOG.md`**，正文用中文。
-- `build-copy.ps1` 只负责本地部署（release 构建 + 复制到本机目录），**与发布无关**，
-  不要把两者混在一起。
+- workflow 跑在远端，本机看不到它的日志。推送后要核实 Actions 结果，
+  不要因为「命令返回 0」就认为发布成功。

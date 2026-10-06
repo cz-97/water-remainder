@@ -259,7 +259,7 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFormat> {
 /// 自绘标题栏高度。栏内按钮与它同高，所以两者共用一个常量。
 const TITLEBAR_HEIGHT: f32 = 38.;
 /// 标题栏按钮宽度：窗口控制键与功能键统一 46px。
-const TITLEBAR_BUTTON_WIDTH: f32 = 46.;
+pub const TITLEBAR_BUTTON_WIDTH: f32 = 46.;
 /// 标题栏图标字体。`Segoe Fluent Icons` 是 Win11 的图标字体，Win10 只有
 /// `Segoe MDL2 Assets`；两者覆盖本项目用到的码位（设置 `E713`、最小化 `E921`、
 /// 最大化 `E922`、还原 `E923`、关闭 `E8BB` —— 已逐个比对过两张字体表）。
@@ -291,6 +291,69 @@ pub fn titlebar(title: &'static str, actions: impl IntoElement) -> impl IntoElem
                 .child(title),
         )
         .child(actions)
+}
+
+/// 三段式标题栏：`left` / `right` 是两侧的按钮组，标题落在窗口正中。
+///
+/// 三段都取 `flex_1`（`flex-basis: 0`），于是各分到栏宽的三分之一，标题那一段
+/// 的中心正好是窗口中心。按内容宽度排列是不行的：主窗左侧两个功能键（92px）、
+/// 右侧三个窗口控制键（138px），标题会向左偏 23px。
+///
+/// 两侧的容器本身**不能**挂 `WindowControlArea::Drag`。命中测试遍历
+/// `window_control_hitboxes` 取第一个命中的，而 hitbox 是 paint 顺序入队的，
+/// 父容器的 Drag 会排在子按钮之前 —— 一挂上去，最小化/最大化/关闭就全被抢走。
+/// 空白处的拖拽能力改由与按钮**不重叠**的弹性占位块提供（`drag_filler`）：
+/// 它排在按钮之后 siblings，命中测试走到它时说明指针不在任何按钮上。
+pub fn titlebar_split(
+    left: impl IntoElement,
+    title: &'static str,
+    right: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .h(px(TITLEBAR_HEIGHT))
+        .flex()
+        .items_center()
+        .bg(rgb(palette::current().titlebar_bg))
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_start()
+                .child(left)
+                .child(drag_filler()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(rgb(palette::current().titlebar_fg))
+                .font_weight(FontWeight::BOLD)
+                .window_control_area(WindowControlArea::Drag)
+                .child(title),
+        )
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_end()
+                .child(drag_filler())
+                .child(right),
+        )
+}
+
+/// 标题栏里只负责「可拖拽」的空块：吃掉一侧的剩余宽度，让按钮仍贴边。
+fn drag_filler() -> impl IntoElement {
+    div()
+        .flex_1()
+        .h_full()
+        .window_control_area(WindowControlArea::Drag)
 }
 
 /// 标题栏内图标按钮的**唯一**样式来源：46×38、图标居中、悬停换底色。

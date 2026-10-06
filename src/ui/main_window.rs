@@ -8,7 +8,7 @@ use crate::{
     ui::{
         ACTION_ICON_SIZE, calendar_color, calendar_level, palette,
         settings_window::{close_settings_window, open_settings_window},
-        titlebar, titlebar_button, window_button,
+        titlebar_button, titlebar_split, window_button,
     },
 };
 use chrono::{Datelike, Local, NaiveDate};
@@ -244,8 +244,9 @@ impl MainWindow {
         records
     }
 
-    /// 标题栏右侧：设置入口 + 最小化 / 最大化 / 关闭。
-    fn title_actions(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    /// 标题栏左侧：设置 + 回到今天。两个键共用 `titlebar_button` 的 46×38 样式，
+    /// 所以高度、垂直居中与彼此的间距天然一致，不需要额外对齐。
+    fn title_leading_actions(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
             .items_center()
@@ -265,6 +266,34 @@ impl MainWindow {
                     }),
                 ),
             )
+            .child(
+                titlebar_button(
+                    "today-button",
+                    palette::current().titlebar_hover,
+                    palette::current().titlebar_fg,
+                    ACTION_ICON_SIZE,
+                )
+                .cursor_pointer()
+                // E72C = Segoe MDL2/Fluent 的「刷新」。已经在当月且选中当天时
+                // 没必要再动，但重绘成本只是两次 BTreeMap 查找，直接无条件重置。
+                .child("\u{e72c}")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        let today = local_date(now());
+                        this.selected_date = today;
+                        this.view_month = today.with_day(1).unwrap_or(today);
+                        cx.notify();
+                    }),
+                ),
+            )
+    }
+
+    /// 标题栏右侧：最小化 / 最大化 / 关闭。顺序与语义都不能动。
+    fn title_trailing_actions(&self, window: &Window) -> Div {
+        div()
+            .flex()
+            .items_center()
             .child(window_button("\u{e921}", WindowControlArea::Min))
             .child(window_button(
                 if window.is_maximized() {
@@ -291,7 +320,11 @@ impl Render for MainWindow {
         };
         let calendar = self.calendar(&input, cx);
         let timeline = self.timeline(&input);
-        let title_bar = titlebar("喝水提醒", self.title_actions(window, cx));
+        let title_bar = titlebar_split(
+            self.title_leading_actions(cx),
+            "喝水统计",
+            self.title_trailing_actions(window),
+        );
 
         div()
             .size_full()
@@ -434,7 +467,7 @@ fn create_main_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("喝水提醒".into()),
+                    title: Some("喝水统计".into()),
                     appears_transparent: true,
                     ..Default::default()
                 }),

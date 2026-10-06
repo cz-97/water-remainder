@@ -6949,7 +6949,7 @@ dependencies = [
 
 [[package]]
 name = "water-remainder"
-version = "0.11.0"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "embed-resource",

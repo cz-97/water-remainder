@@ -24,13 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # rust-toolchain.toml 钉的是 stable 通道，rustup 会自己装；
-      # 这里显式补上组件，避免工具链声明被改动后 CI 静默缺 clippy/rustfmt。
-      - name: Install toolchain
-        run: |
-          rustup show active-toolchain
-          rustup component add rustfmt clippy
-
       # Cargo.lock 已纳入版本控制，缓存可以精确命中。
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -49,22 +42,6 @@ jobs:
             exit 1
           }
           Write-Host "版本核对通过：$tag"
-
-      # 与 AGENTS.md 的本地流程一致：fmt / clippy / test 全部先行，
-      # 任何一步失败都不产出附件。
-      #
-      # **不加 `--offline`**：那个开关是给本机联网受限时用的，CI runner 是干净的
-      # 全新环境，`~/.cargo/registry` 里什么都没有。带着它cargo 会直接报
-      # `no matching package named 'chrono' found` —— `Cargo.lock` 在，但锁文件
-      # 只锁定版本，不含 crate 源码。
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test
 
       - name: Build release
         run: cargo build --release

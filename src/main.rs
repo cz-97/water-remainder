@@ -50,7 +50,7 @@ fn main() {
             }
             // 托盘建不起来就没有常驻入口、也没有退出方式，因此这是致命错误：提示用户
             // 后直接退出，而不是让 `expect` 在 release（`panic = "abort"`）下无声消失。
-            let (tray, show, quit) = match setup_tray() {
+            let (tray, menu_items) = match setup_tray() {
                 Ok(tray) => tray,
                 Err(error) => platform::fatal_startup_error(&format!(
                     "无法创建托盘图标，程序无法继续运行。\n\n{error}"
@@ -69,8 +69,9 @@ fn main() {
                 let _ = wake_tx.send(SchedulerCmd::Reschedule(RescheduleType::Wake));
             })
             .detach();
-            let show_id = show.id().clone();
-            let quit_id = quit.id().clone();
+            let show_id = menu_items.show.id().clone();
+            let settings_id = menu_items.settings.id().clone();
+            let quit_id = menu_items.quit.id().clone();
             let shared_store = store.clone();
             let (event_tx, event_rx) = unbounded();
             let tray_tx = event_tx.clone();
@@ -107,6 +108,16 @@ fn main() {
                         AppEvent::Menu(event) => {
                             if event.id == show_id {
                                 let _ = scheduler_tx.send(SchedulerCmd::Trigger);
+                            } else if event.id == settings_id {
+                                // 设置窗可能被最小化或藏在主窗后面，交给
+                                // `open_settings_window` 复用已有窗口。
+                                let records = shared_store.clone();
+                                let scheduler = scheduler_tx.clone();
+                                cx.update(|cx| {
+                                    ui::settings_window::open_settings_window(
+                                        cx, records, scheduler,
+                                    );
+                                });
                             } else if event.id == quit_id {
                                 let _ = scheduler_tx.send(SchedulerCmd::Stop);
                                 cx.update(|cx| {

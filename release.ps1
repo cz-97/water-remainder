@@ -183,22 +183,33 @@ Step "同步 Cargo.toml 版本号"
 $cargoToml = "Cargo.toml"
 $content = Get-Content $cargoToml -Raw
 # 只替换 [package] 段里那一行，不能全局替换 —— 依赖项也有 version 字段。
+# 不要用 Regex.Replace 的 4 参数重载：那个签名第4 参是 RegexOptions 而非
+# 「替换次数」，传 1 会被当成 IgnoreCase。这里用 -creplacecount 明确限定只改一处。
+$match = [regex]::Match($content, '(?m)^(version\s*=\s*")[^"]+(")')
+if (-not $match.Success) {
+    Fail "未能在 $cargoToml 里找到 version 字段，格式是否变了？"
+}
+$currentVersion = $match.Value -replace '^version\s*=\s*"|"$', ''
+if ($currentVersion -eq $Version) {
+    # 内容和目标版本一致，不是「找不到字段」。这两种情况必须分开报，
+    # 否则用户会以为是格式问题，去查一个根本没坏的东西。
+    Fail "Cargo.toml 里已经是 $Version 了。若要重新发布该版本，请先手工执行：git tag -d v$Version; git push origin :refs/tags/v$Version"
+}
+
 $updated = [regex]::Replace(
     $content,
     '(?m)^(version\s*=\s*")[^"]+(")',
     "`${1}$Version`${2}",
-    1
+    [System.Text.RegularExpressions.RegexOptions]::None,
+    [TimeSpan]::FromSeconds(1)
 )
-if ($updated -eq $content) {
-    Fail "未能在 $cargoToml 里找到 version 字段，格式是否变了？"
-}
 # 确认改到的是 [package] 那一处，而不是某个依赖。
 $pkgVersion = (Select-String -Path $cargoToml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
 if ($pkgVersion -ne $Version) {
-    Fail "改写后读回的版本是 '$pkgVersion'，期望 '$Version'"
+    Fail "改写后读回的版本是 '$pkgVersion'，期望 '$Version'（不要把版本号写进 [package] 以外的段）"
 }
 [System.IO.File]::WriteAllText($cargoToml, $updated, (New-Object System.Text.UTF8Encoding $false))
-Write-Host "  version = $Version" -ForegroundColor Green
+Write-Host "  $currentVersion -> $Version" -ForegroundColor Green
 
 if ((Get-ExternalOutput "git" @("status", "--porcelain", $cargoToml)).Count -eq 0) {
     Fail "$cargoToml 没有产生改动，版本号可能已经是 $Version"

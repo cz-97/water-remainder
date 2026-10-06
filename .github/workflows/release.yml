@@ -1,0 +1,106 @@
+# 推 tag 即发布：Windows release 构建 + 上传 exe 附件。
+#
+# 触发方式：`git push origin vX.Y.Z`（tag 必须与 `Cargo.toml` 的 version 一致，
+# 不一致会在下面「版本核对」这一步直接失败）。
+#
+# 为什么用 tag 而不是手写workflow_dispatch：版本号与产物天然绑定，
+# 不会出现「发布页写着 0.10.0、附件却是旧构建」这种事。
+#
+# 构建只能在 Windows 上跑：程序用了 Win32 API（DWM、注册表、窗口控制区），
+# `windows` crate 那套 feature 在别的平台没有对应实现。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml 钉的是 stable 通道，rustup 会自己装；
+      # 这里显式补上组件，避免工具链声明被改动后 CI 静默缺 clippy/rustfmt。
+      - name: Install toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+
+      # Cargo.lock 已纳入版本控制，缓存可以精确命中。
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      # 版本核对：tag 与 Cargo.toml 不一致就停。少了这一步，
+      # `git tag v9.9.9` 也能发出一个声称是 9.9.9 的旧构建。
+      - name: Verify tag matches Cargo.toml version
+        shell: pwsh
+        run: |
+          $expected = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          $tag = "${{ github.ref_name }}"
+          if ($tag -ne "v$expected") {
+            Write-Error "tag '$tag' 与 Cargo.toml 版本 '$expected' 不一致（应改为 'v$expected'）"
+            exit 1
+          }
+          Write-Host "版本核对通过：$tag"
+
+      # 与 AGENTS.md 的本地流程一致：fmt / clippy / test 全部先行，
+      # 任何一步失败都不产出附件。
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --offline --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --offline
+
+      - name: Build release
+        run: cargo build --release --offline
+
+      # 版本号从Cargo.toml 读，不从 tag 猜——tag 只用来命名 release。
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          $exe = "target\release\water-remainder.exe"
+          if (-not (Test-Path $exe)) { Write-Error "找不到 $exe"; exit 1 }
+          $staged = "water-remainder-$version-windows-x64.exe"
+          Copy-Item $exe $staged
+          $hash = (Get-FileHash $staged -Algorithm SHA256).Hash.ToLower()
+          "$hash  $staged" | Set-Content -Encoding UTF8 "$staged.sha256"
+          # 附件大小要能看见：release 是给用户下载的，7MB 的 exe 和 0MB 的
+          # 坏文件在页面上长得一样。
+          "{0:N2} MiB" -f ((Get-Item $staged).Length / 1MB) | Write-Host
+          Get-ChildItem $staged* | Select-Object Name, Length | Format-Table
+
+      # 用 gh 而非第三方 action：省掉一个第三方依赖，token 直接来自
+      # workflow 权限（上面的 contents: write），不需要额外 secret。
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          $tag = ${{ github.ref_name }}
+          # 发行说明优先用仓库里的 CHANGELOG.md 对应小节；没有就退到提交列表。
+          $notes = @"
+          本版本包含自上一个发行版以来的全部改动。
+
+          安装：下载 `water-remainder-$version-windows-x64.exe` 放到任意目录，双击运行。
+          "`@
+          if (Test-Path CHANGELOG.md) {
+            $notes = "见 CHANGELOG.md 中 $version 的小节。`n`n$notes"
+          }
+          gh release create $tag `
+            "water-remainder-$version-windows-x64.exe" `
+            "water-remainder-$version-windows-x64.exe.sha256" `
+            --title $version `
+            --notes $notes
+          gh release view $tag

@@ -52,17 +52,22 @@ jobs:
 
       # 与 AGENTS.md 的本地流程一致：fmt / clippy / test 全部先行，
       # 任何一步失败都不产出附件。
+      #
+      # **不加 `--offline`**：那个开关是给本机联网受限时用的，CI runner 是干净的
+      # 全新环境，`~/.cargo/registry` 里什么都没有。带着它cargo 会直接报
+      # `no matching package named 'chrono' found` —— `Cargo.lock` 在，但锁文件
+      # 只锁定版本，不含 crate 源码。
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --offline --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --offline
+        run: cargo test
 
       - name: Build release
-        run: cargo build --release --offline
+        run: cargo build --release
 
       # 版本号从Cargo.toml 读，不从 tag 猜——tag 只用来命名 release。
       - name: Package artifact

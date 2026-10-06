@@ -98,6 +98,12 @@ Write-Host ""
 
 # ---------------------------------------------------------------- 前置检查
 
+# 版本号格式先查：拼错成 0.11 或 v0.11.0 会在 Actions那步才失败，
+# 而那时已经花掉一次 release 构建。放在构建之前一秒就能报错。
+if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') {
+    Fail "版本号格式不对：'$Version'。应为三段数字，如 0.11.0（不要带 v 前缀）"
+}
+
 # 脏工作区检查只在发布模式生效。发布要提交并打 tag，带着无关改动提交会把它们
 # 一起带上；纯部署不碰 git，因此不该拦。
 if ($Version) {
@@ -164,16 +170,13 @@ Write-Host ("  已部署（{0:N2} MiB）" -f ($deployedSize / 1MB)) -ForegroundC
 
 # ---------------------------------------------------------------- 发布
 
+# 部署已完成。不带版本号就是纯部署到此为止 —— 顺序上刻意让部署在前，
+# 这样「发布」这个动作必然包含一次可用的本地部署。
 if (-not $Version) {
     Write-Host ""
     Write-Host "部署完成（未发布）。要发布请带上版本号：.\release.ps1 0.11.0" -ForegroundColor Cyan
     Write-Host ""
     Stop-WithPause 0
-}
-
-# 校验版本号格式：拼错成 0.11 或 v0.11.0 会在 Actions 那步才失败，白等一轮。
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    Fail "版本号格式不对：'$Version'。应为三段数字，如 0.11.0（不要带 v 前缀）"
 }
 
 Step "同步 Cargo.toml 版本号"

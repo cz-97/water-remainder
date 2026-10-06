@@ -69,7 +69,7 @@
 - `src/ui/mod.rs`：共享配色、系统外观订阅、标题栏与按钮样式等 UI 支持代码。
 - `src/platform/mod.rs`：平台接口和 Windows 原生窗口、DWM、注册表、单实例、消息框等适配；上层不应自行提取 HWND 或散布平台条件编译。
 - `src/platform/tray.rs`：托盘图标与菜单建立。
-- `build.rs`、`water-remainder.rc`：Windows 资源编译配置；`build-copy.ps1`：发布构建后的复制流程。
+- `build.rs`、`water-remainder.rc`：Windows 资源编译配置；`release.ps1`：构建、部署与发布脚本。
 
 ## 长期实现约定
 
@@ -90,25 +90,41 @@
 
 ## 部署与发布
 
-用户的用词有固定含义，不要自行替换或合并：
+用户的用词有固定含义，不要自行替换或合并。两种模式由 `release.ps1` 的参数决定：
 
-| 用户说 | 含义 | 动作 |
+| 用户说 | 含义 | 命令 |
 | --- | --- | --- |
-| **「部署」** | 只做本地部署 | 执行 `build-copy.ps1`（release 构建 + 复制到本机部署目录），到此为止 |
-| **「发布」** | 部署 **加上传发行版** | 先执行 `build-copy.ps1`，再推 tag 触发 GitHub Release |
+| **「部署」** | 只做本地部署 | `.\release.ps1` |
+| **「发布」** | 部署 **加上传发行版** | `.\release.ps1 <版本号>`，如 `.\release.ps1 0.11.0` |
 
-- **「部署」不推 tag、不建发行版。** 只跑 `build-copy.ps1`。
-- **「发布」是两步，缺一不可**：本地部署 + 上传发行版。只推 tag 不部署，或只部署不推 tag，都算没做完。
-- 部署前若本程序正在运行，exe 被占用会导致复制失败；先按上文「运行验证」的方式结束同名进程。
+- **「部署」不推 tag、不建发行版。** 不传版本号即为部署。
+- **「发布」是两步，缺一不可**：本地部署 + 上传发行版。脚本按顺序做完：
+  结束运行中实例 → release 构建 → 复制到部署目录 → 改 `Cargo.toml` 版本号 →
+  提交 → 推 master → 建 tag → 推 tag。缺任一步都算没做完。
+- **版本号由脚本写入 `Cargo.toml`**，不要手改。手改容易漏，而漏了要等一轮 CI
+  才在版本核对那步失败。
+- 脚本会在动手前检查：工作区必须干净、当前分支必须是 master、版本号必须是三段数字
+  （`v0.11.0`、`0.11.0-beta` 都会被拒）。这些是有意卡住用户的，不是缺陷。
+- **tag 已存在时脚本会拒绝**，不覆盖。覆盖会让 GitHub 上已发布的版本与附件错位；
+  确需重新发布时先手工 `git tag -d` 并 `git push origin :refs/tags/<tag>`。
+- **推送成功不等于发布成功。** Actions 仍可能失败，必须等 run 结束并确认 release
+  上出现了附件：
+  ```
+  gh run watch --repo cz-97/water-remainder
+  gh release view <tag> --repo cz-97/water-remainder
+  ```
 
 ### 推 tag 即上传发行版
 
-`git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z` 会触发
-`.github/workflows/release.yml`：在 windows-latest 上跑完 fmt / clippy / test 与 release 构建，
+`git push origin vX.Y.Z` 触发 `.github/workflows/release.yml`：在 windows-latest 上构建，
 创建 GitHub Release 并附上 `water-remainder-<version>-windows-x64.exe` 与 `.sha256`。
 
 - **tag 必须与 `Cargo.toml` 的 `version` 一致**，否则 workflow 第一步就失败。
-  这一步是有意的：否则 `git tag v9.9.9` 也能发出一个声称 9.9.9 的旧构建。
+- **GitHub 读的是 tag 指向的那个 commit 里的 workflow 文件**，不是 master 的。
+  改了 workflow 又想让新步骤生效，必须把 tag 移到含新 workflow 的 commit 上再推。
 - 发行版面向用户，**改动可见行为或系统行为时更新 `CHANGELOG.md`**，正文用中文。
-- workflow 跑在远端，本机看不到它的日志。推送后要核实 Actions 结果，
+- workflow 跑在远端，本机看不到它的日志。推送失败要看 `gh run view --log-failed`，
   不要因为「命令返回 0」就认为发布成功。
+- **版本号不需要连续。** `Cargo.toml` 的 `version` 在发布时才推进，日常提交不动它；
+  攒够够格的改动发一次即可，线上的号自然会跳号（0.4.1 → 0.10.0）。这与
+  「按改动程度决定升哪一段」的版本规则不冲突。

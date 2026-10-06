@@ -26,7 +26,6 @@ const CONTENT_PADDING: f32 = 48.;
 /// 两列之间的间距（`gap_12` = 3rem = 48px）。
 const COLUMN_GAP: f32 = 48.;
 
-
 const CONTENT_WIDTH: f32 = CALENDER_WIDTH + TIMELINE_WIDTH + CONTENT_PADDING + COLUMN_GAP;
 
 /// 主窗最小高度。
@@ -498,13 +497,19 @@ mod tests {
     #[test]
     fn restored_size_is_lifted_to_the_minimum() {
         assert_eq!(clamp_to_minimum(500., 821.33), (CONTENT_WIDTH, 821.33));
-        assert_eq!(clamp_to_minimum(400., 300.), (CONTENT_WIDTH, CONTENT_HEIGHT));
+        assert_eq!(
+            clamp_to_minimum(400., 300.),
+            (CONTENT_WIDTH, CONTENT_HEIGHT)
+        );
     }
 
     /// 已经够大（或被最大化）的窗口不能被改动。
     #[test]
     fn restored_size_above_the_minimum_is_kept() {
         assert_eq!(clamp_to_minimum(1200., 900.), (1200., 900.));
-        assert_eq!(clamp_to_minimum(CONTENT_WIDTH, CONTENT_HEIGHT), (CONTENT_WIDTH, CONTENT_HEIGHT));
+        assert_eq!(
+            clamp_to_minimum(CONTENT_WIDTH, CONTENT_HEIGHT),
+            (CONTENT_WIDTH, CONTENT_HEIGHT)
+        );
     }
 }

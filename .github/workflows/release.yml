@@ -70,16 +70,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
-          $tag = ${{ github.ref_name }}
-          # 发行说明优先用仓库里的 CHANGELOG.md 对应小节；没有就退到提交列表。
-          $notes = @"
-          本版本包含自上一个发行版以来的全部改动。
-
-          安装：下载 `water-remainder-$version-windows-x64.exe` 放到任意目录，双击运行。
-          "`@
-          if (Test-Path CHANGELOG.md) {
-            $notes = "见 CHANGELOG.md 中 $version 的小节。`n`n$notes"
-          }
+          $tag = "${{ github.ref_name }}"
+          # 发行说明指向CHANGELOG 的对应小节。
+          # 这里刻意不用 here-string：YAML 的 `run: |` 会剥掉统一缩进，
+          # 而 PowerShell 要求 here-string 的终止标记（"@）必须在行首，
+          # 一旦被 YAML 剥掉缩进就变成 ParserError。
+          # 0.10.0 那轮就是这么挂的。
+          $notes = "见 CHANGELOG.md 中 $version 的小节。`n`n" +
+            "本版本包含自上一个发行版以来的全部改动。`n`n" +
+            "安装：下载 water-remainder-$version-windows-x64.exe 放到任意目录，双击运行。"
           gh release create $tag `
             "water-remainder-$version-windows-x64.exe" `
             "water-remainder-$version-windows-x64.exe.sha256" `
